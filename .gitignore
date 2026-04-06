@@ -1,0 +1,39 @@
+### Python ###
+__pycache__/
+
+# Distribution / packaging
+build/
+dist/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+__pypackages__/
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# ruff
+.ruff_cache/
+
+### VisualStudioCode ###
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,python,linux,data,macos
+
+# Custom rules (everything added below won't be overriden by 'Generate .gitignore File' if you use 'Update' option)
+
+temp/
+dataset[s]/
+checkpoints/
