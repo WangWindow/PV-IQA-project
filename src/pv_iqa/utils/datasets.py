@@ -12,9 +12,8 @@ from sklearn.utils import check_random_state
 from torch.utils.data import DataLoader, Dataset
 
 from pv_iqa.config import AppConfig
-from pv_iqa.utils.io import ensure_dir, save_frame
+from pv_iqa.utils.common import save_frame
 from pv_iqa.utils.transforms import build_transforms
-
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
@@ -74,9 +73,10 @@ def build_metadata(config: AppConfig) -> pd.DataFrame:
         if image_path.suffix.lower() in IMAGE_EXTENSIONS:
             grouped_paths[image_path.parent.name].append(image_path)
 
-    class_names = sorted(
-        {_resolve_class_name(folder_name, config.data.identity_mode) for folder_name in grouped_paths}
-    )
+    class_names = sorted({
+        _resolve_class_name(folder_name, config.data.identity_mode)
+        for folder_name in grouped_paths
+    })
     class_to_id = {class_name: index for index, class_name in enumerate(class_names)}
     rng = check_random_state(config.runtime.seed)
 

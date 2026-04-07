@@ -8,7 +8,7 @@ from typing import Any
 import wandb
 
 from pv_iqa.config import AppConfig
-from pv_iqa.utils.io import ensure_dir, save_json
+from pv_iqa.utils.common import ensure_dir, save_json
 
 
 def setup_logging(log_dir: str | Path) -> logging.Logger:

@@ -31,7 +31,7 @@ dependencies = [
 pv-iqa = "pv_iqa:main"
 
 [dependency-groups]
-dev = ["build>=1.4.2"]
+dev = ["build>=1.4.2", "ruff>=0.15.9"]
 
 [build-system]
 requires = ["hatchling"]
@@ -46,3 +46,21 @@ python-install-mirror = "https://registry.npmmirror.com/-/binary/python-build-st
 [[tool.uv.index]]
 url = "https://mirrors.ustc.edu.cn/pypi/simple"
 default = true
+
+[tool.ruff.lint]
+# 1. Enable flake8-bugbear (`B`) rules, in addition to the defaults.
+# select = ["E4", "E7", "E9", "F", "B"]
+
+# 2. Avoid enforcing line-length violations (`E501`)
+ignore = ["E501", "E741"]
+extend-select = ["I"]
+
+[tool.ty.rules]
+# index-out-of-bounds = "ignore"
+unresolved-attribute = "ignore"
+no-matching-overload = "ignore"
+call-non-callable = "ignore"
+invalid-assignment = "ignore"
+invalid-argument-type = "ignore"
+# non-subscriptable = "ignore"
+possibly-missing-attribute = "ignore"

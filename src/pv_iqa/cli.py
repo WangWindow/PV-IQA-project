@@ -1,22 +1,20 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
 
 import typer
 
 from pv_iqa.config import AppConfig, load_config, resolve_run_config
-from pv_iqa.detect import predict_folder, score_folder, score_image
 from pv_iqa.eval import evaluate_erc, predict_quality_scores
-from pv_iqa.train import (
+from pv_iqa.inference import predict_folder, score_folder, score_image
+from pv_iqa.train.iqa import train_iqa
+from pv_iqa.train.pseudo_labels import generate_pseudo_labels
+from pv_iqa.train.recognition import (
     export_recognition_artifacts,
-    generate_pseudo_labels,
-    train_iqa,
     train_recognizer,
 )
-from pv_iqa.utils.data import build_metadata
-from pv_iqa.utils.io import ensure_dir
-from pv_iqa.utils.serialize import dumps_json
-from pv_iqa.utils.seed import seed_everything
+from pv_iqa.utils.common import ensure_dir, set_seed
+from pv_iqa.utils.datasets import build_metadata
 
 app = typer.Typer(help="PV-IQA full pipeline CLI")
 
@@ -24,7 +22,7 @@ app = typer.Typer(help="PV-IQA full pipeline CLI")
 def _load(config_path: str, run_name: str | None = None) -> AppConfig:
     config = resolve_run_config(load_config(config_path), run_name=run_name)
     ensure_dir(config.experiment_dir)
-    seed_everything(config.runtime.seed)
+    set_seed(config.runtime.seed)
     return config
 
 
@@ -102,11 +100,13 @@ def detect_folder_command(
     checkpoint_path = config.experiment_dir / "iqa" / "best.pt"
     if json_output:
         typer.echo(
-            dumps_json(
+            json.dumps(
                 {
                     "run_directory": str(config.experiment_dir),
                     "results": score_folder(config, checkpoint_path, image_root),
-                }
+                },
+                ensure_ascii=False,
+                indent=2,
             )
         )
         return
@@ -127,11 +127,13 @@ def detect_image_command(
     result = score_image(config, checkpoint_path, image_path)
     if json_output:
         typer.echo(
-            dumps_json(
+            json.dumps(
                 {
                     "run_directory": str(config.experiment_dir),
                     "result": result,
-                }
+                },
+                ensure_ascii=False,
+                indent=2,
             )
         )
         return

@@ -1,6 +1,6 @@
 # PV-IQA
 
-基于 `method.md` 的掌静脉图像质量评估项目，覆盖：
+基于深度学习的掌静脉图像质量评估项目，覆盖：
 
 1. 掌静脉识别基线训练
 2. SDD + CR 双重约束伪标签生成
@@ -9,7 +9,7 @@
 
 当前默认输入为**已经裁剪好的掌静脉 ROI 图像**，暂不包含 ROI 提取阶段。
 
-## 技术栈
+## 代码工具
 
 - `uv` 管理项目与环境
 - `Python 3.14`
@@ -18,20 +18,6 @@
 - `wandb` 实验日志
 - `hatchling` 构建
 
-## 项目结构
-
-```text
-datasets/ROI_Data/           # 已裁剪的掌静脉 ROI 数据
-configs/default.yaml         # 主配置
-src/pv_iqa/
-  cli.py                     # 命令行入口
-  config.py                  # 配置模型
-  train.py                   # 训练总入口：识别/IQA/伪标签
-  eval.py                    # ERC / EER / TAR 评估
-  detect.py                  # 单独推理与目录检测
-  models/                    # 识别模型与 IQA 模型
-  utils/                     # 数据、损失、指标、日志、伪标签工具
-```
 
 ## 初始化
 
@@ -93,9 +79,13 @@ uv run pv-iqa run-all
   - `disabled`：完全关闭 wandb
   - `online`：在线同步
 
-## Demo 前端
+----
 
-前端位于 `app/`，采用 `Vite + React + Tailwind CSS + shadcn + Bun`，并增加了 `react-router-dom` 路由结构与 `motion` 动画。模型推理仍由 `uv run pv-iqa ...` 提供，Bun 仅做上传桥接、任务调度与 SQLite 持久化。
+## 演示前端
+
+前端位于 `app/`，采用 `Vite + React + Tailwind CSS + shadcn + Bun`，并增加了 `react-router-dom` 路由结构与 `motion` 动画。
+
+模型推理仍由 `uv run pv-iqa ...` 提供，Bun 仅做上传桥接、任务调度与 SQLite 持久化。
 
 ### 开发启动
 
