@@ -78,6 +78,8 @@ class PseudoLabelConfig:
 class IQAConfig:
     backbone: str = "mobilenetv3_large_100"
     pretrained: bool = True
+    use_waveformer_layer: bool = False
+    waveformer_mlp_ratio: float = 2.0
     epochs: int = 15
     learning_rate: float = 2e-4
     weight_decay: float = 5e-5

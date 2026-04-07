@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,18 +42,29 @@ class ExperimentLogger:
         self.logger = setup_logging(output_dir)
         self._wandb_enabled = config.logger.use_wandb
         self._wandb_run = None
+        self.wandb_name = f"{datetime.now():%Y%m%d-%H%M%S}-{run_name}"
 
         save_json(output_dir / "config.json", asdict(config))
         if self._wandb_enabled:
             self._wandb_run = wandb.init(
                 project=config.logger.wandb_project,
                 entity=config.logger.wandb_entity,
-                name=run_name,
+                name=self.wandb_name,
                 mode=config.logger.wandb_mode,
                 tags=config.logger.tags,
+                group=config.experiment.name,
+                job_type=run_name,
                 config=asdict(config),
                 dir=str(output_dir),
-                reinit=True,
+                reinit="finish_previous",
+            )
+            self.logger.info(
+                "wandb initialized | %s",
+                {
+                    "name": self.wandb_name,
+                    "group": config.experiment.name,
+                    "job_type": run_name,
+                },
             )
 
     def info(self, message: str, **extra: Any) -> None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -7,10 +9,19 @@ from torch import nn
 from .backbone import IQABackbone
 from .layers.attention import TransposedAttentionBlock
 from .layers.mixer import LocalWindowMixer
+from .layers.waveformer import WaveFormerLayer
 
 
 class LightweightIQARegressor(nn.Module):
-    def __init__(self, backbone_name: str, pretrained: bool) -> None:
+    def __init__(
+        self,
+        backbone_name: str,
+        pretrained: bool,
+        *,
+        image_size: int,
+        use_waveformer_layer: bool = False,
+        waveformer_mlp_ratio: float = 2.0,
+    ) -> None:
         super().__init__()
         self.backbone = IQABackbone(
             backbone_name,
@@ -18,7 +29,19 @@ class LightweightIQARegressor(nn.Module):
             out_indices=(1, 2, 4),
         )
         channels = self.backbone.feature_info.channels()
+        reductions = self.backbone.feature_info.reduction()
+        high_reduction = int(reductions[-1])
+        waveformer_resolution = max(1, math.ceil(image_size / high_reduction))
         self.local_mixer = LocalWindowMixer(channels[0])
+        self.waveformer = (
+            WaveFormerLayer(
+                channels[-1],
+                base_resolution=waveformer_resolution,
+                mlp_ratio=waveformer_mlp_ratio,
+            )
+            if use_waveformer_layer
+            else None
+        )
         self.deep_attention = TransposedAttentionBlock(channels[-1])
         self.align_local = nn.Sequential(
             nn.Conv2d(channels[0], 128, kernel_size=1),
@@ -45,6 +68,8 @@ class LightweightIQARegressor(nn.Module):
         # 低层特征保留纹理细节，高层特征提供更稳定的结构语义。
         low_feature, _, high_feature = self.backbone(image)
         low_feature = self.local_mixer(low_feature)
+        if self.waveformer is not None:
+            high_feature = self.waveformer(high_feature)
         high_feature = self.deep_attention(high_feature)
 
         local = self.align_local(low_feature)
@@ -62,3 +87,6 @@ class LightweightIQARegressor(nn.Module):
             "score_map": score_map.squeeze(1),
             "weight_map": weight_map.squeeze(1),
         }
+
+
+__all__ = ["LightweightIQARegressor"]

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from itertools import combinations
 
 import numpy as np
+from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import (
     accuracy_score,
     mean_absolute_error,
@@ -29,16 +31,69 @@ def evaluate_classification(
 class RegressionReport:
     mae: float
     rmse: float
+    pearson: float
+    spearman: float
+    ranking_accuracy: float
+
+
+def _safe_correlation(
+    function,
+    targets: np.ndarray,
+    predictions: np.ndarray,
+) -> float:
+    if len(targets) < 2:
+        return 0.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            result = function(targets, predictions)
+        except ValueError:
+            return 0.0
+    value = float(result.statistic)
+    return 0.0 if np.isnan(value) else value
+
+
+def pairwise_ranking_accuracy(
+    targets: list[float] | np.ndarray,
+    predictions: list[float] | np.ndarray,
+    *,
+    min_gap: float = 0.0,
+) -> float:
+    target_array = np.asarray(targets, dtype=np.float32)
+    prediction_array = np.asarray(predictions, dtype=np.float32)
+    pair_gap = target_array[:, None] - target_array[None, :]
+    prediction_gap = prediction_array[:, None] - prediction_array[None, :]
+    valid_pairs = pair_gap > min_gap
+    if not np.any(valid_pairs):
+        return 0.0
+    return float(np.mean(prediction_gap[valid_pairs] > 0.0))
 
 
 def evaluate_regression(
     targets: list[float],
     predictions: list[float],
+    *,
+    min_ranking_gap: float = 0.0,
 ) -> RegressionReport:
     """IQA 回归阶段统一输出 MAE / RMSE。"""
+    targets_array = np.asarray(targets, dtype=np.float32)
+    predictions_array = np.asarray(predictions, dtype=np.float32)
     mae = mean_absolute_error(targets, predictions)
     rmse = mean_squared_error(targets, predictions) ** 0.5
-    return RegressionReport(mae=float(mae), rmse=float(rmse))
+    pearson = _safe_correlation(pearsonr, targets_array, predictions_array)
+    spearman = _safe_correlation(spearmanr, targets_array, predictions_array)
+    ranking_accuracy = pairwise_ranking_accuracy(
+        targets_array,
+        predictions_array,
+        min_gap=min_ranking_gap,
+    )
+    return RegressionReport(
+        mae=float(mae),
+        rmse=float(rmse),
+        pearson=pearson,
+        spearman=spearman,
+        ranking_accuracy=ranking_accuracy,
+    )
 
 
 class VerificationEvaluator:
@@ -115,7 +170,13 @@ def classification_accuracy(targets: list[int], predictions: list[int]) -> float
 
 def regression_summary(targets: list[float], predictions: list[float]) -> dict[str, float]:
     report = evaluate_regression(targets, predictions)
-    return {"mae": report.mae, "rmse": report.rmse}
+    return {
+        "mae": report.mae,
+        "rmse": report.rmse,
+        "pearson": report.pearson,
+        "spearman": report.spearman,
+        "ranking_accuracy": report.ranking_accuracy,
+    }
 
 
 def verification_metrics(
@@ -141,6 +202,7 @@ __all__ = [
     "classification_accuracy",
     "evaluate_classification",
     "evaluate_regression",
+    "pairwise_ranking_accuracy",
     "regression_summary",
     "verification_metrics",
 ]

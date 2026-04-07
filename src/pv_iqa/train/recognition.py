@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -166,8 +167,10 @@ def train_recognizer(config: AppConfig) -> Path:
 
     best_accuracy = float("-inf")
     best_checkpoint = output_dir / "best.pt"
+    best_epoch = 0
 
     for epoch in range(1, config.recognizer.epochs + 1):
+        epoch_start = time.perf_counter()
         model.train()
         train_losses: list[float] = []
 
@@ -188,35 +191,53 @@ def train_recognizer(config: AppConfig) -> Path:
         model.eval()
         predictions: list[int] = []
         targets: list[int] = []
+        val_losses: list[float] = []
 
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"recognizer-val-{epoch}", leave=False):
                 batch = move_batch_to_device(batch, device)
                 outputs = model(batch["image"])
+                loss_output = criterion(outputs.logits, batch["target"])
+                val_losses.append(float(loss_output.total.detach().item()))
                 predictions.extend(outputs.logits.argmax(dim=1).cpu().tolist())
                 targets.extend(batch["target"].cpu().tolist())
 
         classification_report = evaluate_classification(targets, predictions)
         val_accuracy = classification_report.accuracy
+        if val_accuracy >= best_accuracy:
+            best_accuracy = val_accuracy
+            best_epoch = epoch
+            torch.save(
+                {
+                    "model_state": model.state_dict(),
+                    "best_accuracy": best_accuracy,
+                    "best_epoch": best_epoch,
+                },
+                best_checkpoint,
+            )
+
         logger.log_metrics(
             {
                 "recognizer/train_loss": float(
                     sum(train_losses) / max(1, len(train_losses))
                 ),
+                "recognizer/val_loss": float(
+                    sum(val_losses) / max(1, len(val_losses))
+                ),
                 "recognizer/val_accuracy": val_accuracy,
+                "recognizer/epoch_seconds": time.perf_counter() - epoch_start,
                 "recognizer/lr": float(optimizer.param_groups[0]["lr"]),
+                "recognizer/best_accuracy": best_accuracy,
+                "recognizer/best_epoch": float(best_epoch),
             },
             step=epoch,
         )
         scheduler.step()
 
-        if val_accuracy >= best_accuracy:
-            best_accuracy = val_accuracy
-            torch.save(
-                {"model_state": model.state_dict(), "best_accuracy": best_accuracy},
-                best_checkpoint,
-            )
-
-    logger.info("recognizer training finished", best_accuracy=best_accuracy)
+    logger.info(
+        "recognizer training finished",
+        best_accuracy=best_accuracy,
+        best_epoch=best_epoch,
+    )
     logger.finish()
     return best_checkpoint

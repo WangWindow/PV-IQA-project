@@ -25,11 +25,23 @@ def load_iqa_checkpoint(
     checkpoint_path: str | Path,
 ) -> tuple[LightweightIQARegressor, torch.device]:
     device = resolve_device(config)
-    model = LightweightIQARegressor(
-        backbone_name=config.iqa.backbone,
-        pretrained=False,
-    ).to(device)
     checkpoint = torch.load(checkpoint_path, map_location=device)
+    model_kwargs = checkpoint.get(
+        "model_kwargs",
+        {
+            "backbone_name": config.iqa.backbone,
+            "pretrained": False,
+            "image_size": config.data.image_size,
+            "use_waveformer_layer": config.iqa.use_waveformer_layer,
+            "waveformer_mlp_ratio": config.iqa.waveformer_mlp_ratio,
+        },
+    )
+    model = LightweightIQARegressor(
+        **{
+            **model_kwargs,
+            "pretrained": False,
+        }
+    ).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
     return model, device

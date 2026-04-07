@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,9 @@ def build_iqa_model(config: AppConfig) -> LightweightIQARegressor:
     return LightweightIQARegressor(
         backbone_name=config.iqa.backbone,
         pretrained=config.iqa.pretrained,
+        image_size=config.data.image_size,
+        use_waveformer_layer=config.iqa.use_waveformer_layer,
+        waveformer_mlp_ratio=config.iqa.waveformer_mlp_ratio,
     )
 
 
@@ -76,6 +80,13 @@ def train_iqa(config: AppConfig) -> Path:
     device = resolve_device(config)
     output_dir = ensure_dir(config.experiment_dir / "iqa")
     logger = ExperimentLogger(config, "iqa", output_dir)
+    model_kwargs = {
+        "backbone_name": config.iqa.backbone,
+        "pretrained": False,
+        "image_size": config.data.image_size,
+        "use_waveformer_layer": config.iqa.use_waveformer_layer,
+        "waveformer_mlp_ratio": config.iqa.waveformer_mlp_ratio,
+    }
 
     model = build_iqa_model(config).to(device)
     model = maybe_compile(model, config)
@@ -99,10 +110,14 @@ def train_iqa(config: AppConfig) -> Path:
 
     best_mae = float("inf")
     best_checkpoint = output_dir / "best.pt"
+    best_epoch = 0
 
     for epoch in range(1, config.iqa.epochs + 1):
+        epoch_start = time.perf_counter()
         model.train()
         train_losses: list[float] = []
+        train_huber_losses: list[float] = []
+        train_ranking_losses: list[float] = []
 
         # IQA 训练阶段同时优化回归损失和排序损失。
         for batch in tqdm(train_loader, desc=f"iqa-train-{epoch}", leave=False):
@@ -117,37 +132,75 @@ def train_iqa(config: AppConfig) -> Path:
             scaler.step(optimizer)
             scaler.update()
             train_losses.append(float(loss_output.total.detach().item()))
+            train_huber_losses.append(float(loss_output.huber.detach().item()))
+            train_ranking_losses.append(float(loss_output.ranking.detach().item()))
 
         model.eval()
         predictions: list[float] = []
         targets: list[float] = []
+        val_losses: list[float] = []
+        val_huber_losses: list[float] = []
+        val_ranking_losses: list[float] = []
 
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"iqa-val-{epoch}", leave=False):
                 batch = move_batch_to_device(batch, device)
                 outputs = model(batch["image"])
+                loss_output = criterion(outputs["score"], batch["target"].float())
+                val_losses.append(float(loss_output.total.detach().item()))
+                val_huber_losses.append(float(loss_output.huber.detach().item()))
+                val_ranking_losses.append(float(loss_output.ranking.detach().item()))
                 predictions.extend(outputs["score"].cpu().tolist())
                 targets.extend(batch["target"].cpu().tolist())
 
-        summary = evaluate_regression(targets, predictions)
+        summary = evaluate_regression(
+            targets,
+            predictions,
+            min_ranking_gap=config.iqa.min_ranking_gap,
+        )
+        if summary.mae <= best_mae:
+            best_mae = summary.mae
+            best_epoch = epoch
+            torch.save(
+                {
+                    "model_state": model.state_dict(),
+                    "best_mae": best_mae,
+                    "best_epoch": best_epoch,
+                    "model_kwargs": model_kwargs,
+                },
+                best_checkpoint,
+            )
+
         logger.log_metrics(
             {
                 "iqa/train_loss": float(sum(train_losses) / max(1, len(train_losses))),
+                "iqa/train_huber": float(
+                    sum(train_huber_losses) / max(1, len(train_huber_losses))
+                ),
+                "iqa/train_ranking": float(
+                    sum(train_ranking_losses) / max(1, len(train_ranking_losses))
+                ),
+                "iqa/val_loss": float(sum(val_losses) / max(1, len(val_losses))),
                 "iqa/val_mae": summary.mae,
                 "iqa/val_rmse": summary.rmse,
+                "iqa/val_huber": float(
+                    sum(val_huber_losses) / max(1, len(val_huber_losses))
+                ),
+                "iqa/val_ranking": float(
+                    sum(val_ranking_losses) / max(1, len(val_ranking_losses))
+                ),
+                "iqa/val_pearson": summary.pearson,
+                "iqa/val_spearman": summary.spearman,
+                "iqa/val_ranking_accuracy": summary.ranking_accuracy,
+                "iqa/epoch_seconds": time.perf_counter() - epoch_start,
                 "iqa/lr": float(optimizer.param_groups[0]["lr"]),
+                "iqa/best_mae": best_mae,
+                "iqa/best_epoch": float(best_epoch),
             },
             step=epoch,
         )
         scheduler.step()
 
-        if summary.mae <= best_mae:
-            best_mae = summary.mae
-            torch.save(
-                {"model_state": model.state_dict(), "best_mae": best_mae},
-                best_checkpoint,
-            )
-
-    logger.info("iqa training finished", best_mae=best_mae)
+    logger.info("iqa training finished", best_mae=best_mae, best_epoch=best_epoch)
     logger.finish()
     return best_checkpoint

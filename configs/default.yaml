@@ -30,7 +30,7 @@ data:
   pin_memory: true
 
 recognizer:
-  backbone: "mobilenetv3_large_100"
+  backbone: "mobilenetv3_large_100" # backbone name from `timm` library
   pretrained: true
   embedding_dim: 256
   dropout: 0.1
@@ -53,8 +53,10 @@ pseudo_labels:
   eps: 1.0e-6
 
 iqa:
-  backbone: "mobilenetv3_large_100"
+  backbone: "mobilenetv3_large_100" # backbone name from `timm` library
   pretrained: true
+  use_waveformer_layer: true
+  waveformer_mlp_ratio: 2.0
   epochs: 15
   learning_rate: 0.0002
   weight_decay: 0.00005

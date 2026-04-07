@@ -78,6 +78,9 @@ uv run pv-iqa run-all
   - `offline`：默认，适合本地实验
   - `disabled`：完全关闭 wandb
   - `online`：在线同步
+- `iqa.use_waveformer_layer`
+  - `false`：默认，保持现有 MobileNetV3 + TAB 结构
+  - `true`：在 IQA 高层特征分支插入 WaveFormer 风格频域增强层
 
 ----
 
@@ -96,7 +99,8 @@ bun run dev
 ```
 
 - 前端开发页：`http://localhost:6006`
-- Bun API：`http://localhost:6007`
+- Bun API：默认 `http://localhost:6005`
+- 如需改端口，可在启动前设置 `PV_IQA_API_PORT` 或 `PORT`，前端代理会自动跟随
 
 ### 生产启动
 
@@ -130,6 +134,6 @@ bun run start
 ## 说明
 
 - 伪标签生成使用识别特征和分类器权重，分别构建 `QSDD` 与 `QCR`，再做归一化融合。
-- IQA 回归模型采用轻量级 `MobileNetV3` 特征骨干，并加入局部混合与通道转置注意力模块。
+- IQA 回归模型采用轻量级 `MobileNetV3` 特征骨干，并加入局部混合、可选 WaveFormer 频域增强层与通道转置注意力模块。
 - 评估阶段通过逐步排斥低质量样本，观察剩余集合上的 EER / TAR 变化，形成 ERC 曲线。
 - 当前默认假设输入已经是 ROI 图像，因此不额外实现 ROI 检测与裁剪。
