@@ -68,7 +68,8 @@ const REPO_ROOT = resolve(APP_ROOT, "..")
 const DATA_ROOT = resolve(APP_ROOT, "data")
 const UPLOAD_ROOT = resolve(DATA_ROOT, "uploads")
 const DIST_ROOT = resolve(APP_ROOT, "dist")
-const PORT = Number(process.env.PORT ?? (process.env.NODE_ENV === "production" ? 6006 : 6007))
+const DEFAULT_PORT = process.env.NODE_ENV === "production" ? 6006 : 6005
+const PORT = Number(process.env.PV_IQA_API_PORT ?? process.env.PORT ?? DEFAULT_PORT)
 
 await mkdir(DATA_ROOT, { recursive: true })
 await mkdir(UPLOAD_ROOT, { recursive: true })
