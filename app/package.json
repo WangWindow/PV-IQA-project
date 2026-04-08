@@ -7,6 +7,7 @@
     "dev": "concurrently -k \"bun run dev:api\" \"bun run dev:web\"",
     "dev:web": "vite --host 0.0.0.0 --port 6006",
     "dev:api": "bun --watch server.ts",
+    "stop:api": "../bin/stop-pv-iqa-api",
     "build": "tsc -b && vite build",
     "build:web": "tsc -b && vite build",
     "lint": "eslint .",

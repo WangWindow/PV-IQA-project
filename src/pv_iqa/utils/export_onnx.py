@@ -16,7 +16,7 @@ IMAGENET_NORMALIZE_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_NORMALIZE_STD = [0.229, 0.224, 0.225]
 ONNX_INPUT_NAME = "image"
 ONNX_OUTPUT_NAME = "score"
-RUST_EXPORT_PROFILE = "candle-upstream-static-v1"
+RUST_EXPORT_PROFILE = "candle-upstream-static-v2"
 
 
 class IQAScoreExportWrapper(nn.Module):
@@ -160,7 +160,7 @@ def _collect_value_shapes(model_proto: onnx.ModelProto) -> dict[str, list[int | 
     return shapes
 
 
-def _rewrite_reduction_axes(model_proto: onnx.ModelProto) -> onnx.ModelProto:
+def _rewrite_opset17_compat(model_proto: onnx.ModelProto) -> onnx.ModelProto:
     reduction_ops = {"ReduceMean", "ReduceL2", "ReduceSum"}
     axes_values = {
         initializer.name: [int(item) for item in to_array(initializer).reshape(-1).tolist()]
@@ -169,8 +169,28 @@ def _rewrite_reduction_axes(model_proto: onnx.ModelProto) -> onnx.ModelProto:
     value_ranks = _collect_value_ranks(model_proto)
     new_nodes: list[onnx.NodeProto] = []
     initializer_updates: dict[str, list[int]] = {}
+    initializers_to_drop: set[str] = set()
 
     for node in model_proto.graph.node:
+        if node.op_type == "Split":
+            attrs = {
+                attribute.name: onnx.helper.get_attribute_value(attribute)
+                for attribute in node.attribute
+            }
+            if "num_outputs" not in attrs:
+                new_nodes.append(node)
+                continue
+            new_nodes.append(
+                onnx.helper.make_node(
+                    "Split",
+                    inputs=[node.input[0]],
+                    outputs=list(node.output),
+                    name=node.name,
+                    axis=int(attrs.get("axis", 0)),
+                )
+            )
+            continue
+
         if node.op_type not in reduction_ops or len(node.input) < 2:
             new_nodes.append(node)
             continue
@@ -189,7 +209,8 @@ def _rewrite_reduction_axes(model_proto: onnx.ModelProto) -> onnx.ModelProto:
             attribute.name: onnx.helper.get_attribute_value(attribute)
             for attribute in node.attribute
         }
-        if node.op_type == "ReduceMean":
+        if node.op_type in {"ReduceMean", "ReduceL2"}:
+            initializers_to_drop.add(axes_name)
             new_nodes.append(
                 onnx.helper.make_node(
                     node.op_type,
@@ -207,9 +228,12 @@ def _rewrite_reduction_axes(model_proto: onnx.ModelProto) -> onnx.ModelProto:
 
     del model_proto.graph.node[:]
     model_proto.graph.node.extend(new_nodes)
-    if initializer_updates:
+    used_initializer_names = {input_name for node in new_nodes for input_name in node.input}
+    if initializer_updates or initializers_to_drop:
         new_initializers: list[onnx.TensorProto] = []
         for initializer in model_proto.graph.initializer:
+            if initializer.name in initializers_to_drop and initializer.name not in used_initializer_names:
+                continue
             updated_axes = initializer_updates.get(initializer.name)
             if updated_axes is None:
                 new_initializers.append(initializer)
@@ -275,7 +299,7 @@ def export_iqa_onnx(
     model_proto = onnx.load(onnx_path)
     convert_model_from_external_data(model_proto)
     model_proto = _decompose_hard_sigmoid(model_proto)
-    model_proto = _rewrite_reduction_axes(model_proto)
+    model_proto = _rewrite_opset17_compat(model_proto)
     if model_proto.opset_import[0].version != opset_version:
         model_proto.opset_import[0].version = opset_version
     onnx.save_model(model_proto, onnx_path, save_as_external_data=False)

@@ -122,17 +122,16 @@ const RUST_SERVICE_PORT = Number(
     (RUST_SERVICE_ENDPOINT.protocol === "https:" ? "443" : "80")
 )
 const RUST_PROJECT_ROOT = process.env.PV_IQA_RS_PROJECT_ROOT ?? "/root/autodl-tmp/PV-IQA-rs"
-const RUST_EXPORT_PROFILE = "candle-upstream-static-v1"
-const RUST_CARGO_FEATURES = (process.env.PV_IQA_RS_CARGO_FEATURES ?? "").trim()
+const RUST_EXPORT_PROFILE = "candle-upstream-static-v2"
+const RUST_CUDA_FEATURES = (process.env.PV_IQA_RS_CARGO_FEATURES ?? "cuda").trim() || "cuda"
 const RUST_AUTOSTART = process.env.PV_IQA_RS_AUTOSTART !== "0"
 const RUST_USE_RELEASE = process.env.PV_IQA_RS_RELEASE !== "0"
 const RUST_BINARY_OVERRIDE = (process.env.PV_IQA_RS_BINARY ?? "").trim()
 const RUST_BINARY_NAME = process.platform === "win32" ? "pv-iqa-rs.exe" : "pv-iqa-rs"
 const RUST_BINARY_PROFILE = RUST_USE_RELEASE ? "release" : "debug"
-const RUST_BINARY_FEATURE_TAG = sanitizeSegment(
-  (RUST_CARGO_FEATURES || "default").replace(/\s+/g, "-")
-)
-const RUST_BINARY_PREFIX = `pv-iqa-rs-${RUST_BINARY_PROFILE}-${RUST_BINARY_FEATURE_TAG}-`
+const RUST_DEVICE_PREFERENCE = (process.env.PV_IQA_RS_DEVICE ?? "auto").trim().toLowerCase()
+const RUST_PREPROCESS_MODE = (process.env.PV_IQA_RS_PREPROCESS_MODE ?? "python-pillow").trim()
+const RUST_RESIZE_MODE = (process.env.PV_IQA_RS_RESIZE_MODE ?? "fast-convolution-bilinear").trim()
 const RUST_HEALTH_TIMEOUT_MS = Number(process.env.PV_IQA_RS_HEALTH_TIMEOUT_MS ?? 1500)
 const RUST_REQUEST_TIMEOUT_MS = Number(process.env.PV_IQA_RS_REQUEST_TIMEOUT_MS ?? 300000)
 const RUST_START_TIMEOUT_MS = Number(process.env.PV_IQA_RS_START_TIMEOUT_MS ?? 300000)
@@ -346,7 +345,21 @@ function rustBinaryTimestamp(): string {
   return `${iso.slice(0, 10).replace(/-/g, "")}-${iso.slice(11, 19).replace(/:/g, "")}`
 }
 
-async function findLatestRustBinary(): Promise<string | null> {
+type RustBinaryVariant = "cpu" | "cuda"
+
+function rustBinaryPrefix(variant: RustBinaryVariant): string {
+  return `pv-iqa-rs-${RUST_BINARY_PROFILE}-${variant}-`
+}
+
+function rustBinaryFeatureArgs(variant: RustBinaryVariant): string[] {
+  return variant === "cuda" ? ["--features", RUST_CUDA_FEATURES] : []
+}
+
+function preferredRustBinaryVariant(): RustBinaryVariant {
+  return RUST_DEVICE_PREFERENCE === "cpu" ? "cpu" : "cuda"
+}
+
+async function findLatestRustBinary(variant: RustBinaryVariant): Promise<string | null> {
   if (RUST_BINARY_OVERRIDE) {
     const overridePath = resolve(REPO_ROOT, RUST_BINARY_OVERRIDE)
     if (!(await Bun.file(overridePath).exists())) {
@@ -359,7 +372,7 @@ async function findLatestRustBinary(): Promise<string | null> {
   const entries = await readdir(BIN_ROOT, { withFileTypes: true }).catch(() => [])
   const candidates = await Promise.all(
     entries
-      .filter((entry) => entry.isFile() && entry.name.startsWith(RUST_BINARY_PREFIX))
+      .filter((entry) => entry.isFile() && entry.name.startsWith(rustBinaryPrefix(variant)))
       .map(async (entry) => {
         const filePath = resolve(BIN_ROOT, entry.name)
         const file = Bun.file(filePath)
@@ -379,26 +392,32 @@ async function findLatestRustBinary(): Promise<string | null> {
   return latest?.path ?? null
 }
 
-async function publishRustBinary(sourcePath: string): Promise<string> {
+async function publishRustBinary(variant: RustBinaryVariant, sourcePath: string): Promise<string> {
   await mkdir(BIN_ROOT, { recursive: true })
   const extension = process.platform === "win32" ? ".exe" : ""
-  const targetPath = resolve(BIN_ROOT, `${RUST_BINARY_PREFIX}${rustBinaryTimestamp()}${extension}`)
+  const targetPath = resolve(
+    BIN_ROOT,
+    `${rustBinaryPrefix(variant)}${rustBinaryTimestamp()}${extension}`
+  )
   await copyFile(sourcePath, targetPath)
   await chmod(targetPath, 0o755).catch(() => undefined)
   return targetPath
 }
 
-async function buildRustBinary(): Promise<string> {
+async function buildRustBinary(variant: RustBinaryVariant): Promise<string> {
   if (!(await Bun.file(resolve(RUST_PROJECT_ROOT, "Cargo.toml")).exists())) {
     throw new Error(`Rust backend project not found at ${RUST_PROJECT_ROOT}.`)
   }
 
+  console.log(
+    `[pv-iqa] building Rust ${variant.toUpperCase()} binary (${RUST_BINARY_PROFILE}${variant === "cuda" ? `, features=${RUST_CUDA_FEATURES}` : ""})`
+  )
   const buildCommand = Bun.spawn(
     [
       "cargo",
       "build",
       ...(RUST_USE_RELEASE ? ["--release"] : []),
-      ...(RUST_CARGO_FEATURES ? ["--features", RUST_CARGO_FEATURES] : []),
+      ...rustBinaryFeatureArgs(variant),
     ],
     {
       cwd: RUST_PROJECT_ROOT,
@@ -422,15 +441,31 @@ async function buildRustBinary(): Promise<string> {
   if (!(await Bun.file(targetPath).exists())) {
     throw new Error(`Built Rust binary not found at ${targetPath}.`)
   }
-  return publishRustBinary(targetPath)
+  return publishRustBinary(variant, targetPath)
+}
+
+async function ensureRustBinaries(): Promise<Record<RustBinaryVariant, string>> {
+  const variants: RustBinaryVariant[] = ["cpu", "cuda"]
+  const binaries = {} as Record<RustBinaryVariant, string>
+
+  for (const variant of variants) {
+    const existingBinary = await findLatestRustBinary(variant)
+    binaries[variant] = existingBinary ?? (await buildRustBinary(variant))
+  }
+  return binaries
 }
 
 async function ensureRustBinary(): Promise<string> {
-  const existingBinary = await findLatestRustBinary()
-  if (existingBinary) {
-    return existingBinary
+  if (RUST_BINARY_OVERRIDE) {
+    const overridePath = await findLatestRustBinary("cpu")
+    if (!overridePath) {
+      throw new Error("Configured Rust binary override could not be resolved.")
+    }
+    return overridePath
   }
-  return buildRustBinary()
+
+  const binaries = await ensureRustBinaries()
+  return binaries[preferredRustBinaryVariant()]
 }
 
 async function fetchJson<T>(
@@ -583,6 +618,9 @@ async function startRustBackend(): Promise<void> {
           PV_IQA_REPO_ROOT: REPO_ROOT,
           PV_IQA_RS_HOST: RUST_SERVICE_HOST,
           PV_IQA_RS_PORT: String(RUST_SERVICE_PORT),
+          PV_IQA_RS_DEVICE: process.env.PV_IQA_RS_DEVICE ?? "auto",
+          PV_IQA_RS_PREPROCESS_MODE: RUST_PREPROCESS_MODE,
+          PV_IQA_RS_RESIZE_MODE: RUST_RESIZE_MODE,
         },
       }
     )

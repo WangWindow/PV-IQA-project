@@ -389,6 +389,18 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
     folderInputRef.current?.setAttribute("directory", "")
   }, [])
 
+  useEffect(() => {
+    if (!dashboard.singleFile && imageInputRef.current) {
+      imageInputRef.current.value = ""
+    }
+  }, [dashboard.singleFile])
+
+  useEffect(() => {
+    if (!dashboard.folderItems.length && folderInputRef.current) {
+      folderInputRef.current.value = ""
+    }
+  }, [dashboard.folderItems.length])
+
   const singlePreviewUrl = useMemo(
     () => (dashboard.singleFile ? URL.createObjectURL(dashboard.singleFile) : null),
     [dashboard.singleFile]
