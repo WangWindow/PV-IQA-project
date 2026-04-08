@@ -88,7 +88,10 @@ uv run pv-iqa run-all
 
 前端位于 `app/`，采用 `Vite + React + Tailwind CSS + shadcn + Bun`，并增加了 `react-router-dom` 路由结构与 `motion` 动画。
 
-模型推理仍由 `uv run pv-iqa ...` 提供，Bun 仅做上传桥接、任务调度与 SQLite 持久化。
+当前支持两条推理路径：
+
+- `Python`：沿用 `uv run pv-iqa ...`
+- `Rust Candle`：由 Bun 调用 `/root/autodl-tmp/PV-IQA-rs` 中的常驻服务
 
 ### 开发启动
 
@@ -118,6 +121,7 @@ bun run start
 - 支持**拖拽上传**
 - 支持**异步任务状态**、阶段文本、已处理数量
 - 支持**历史任务查看与彻底删除**
+- 支持在工作台中切换 **Python / Rust** 推理后端
 - 页面拆分为：
   - `/workspace`：评分工作台
   - `/jobs`：任务管理与结果查看
@@ -129,6 +133,85 @@ bun run start
 - SQLite 数据库存放在 `app/data/demo.sqlite`
 - 上传文件存放在 `app/data/uploads/<jobId>/`
 - 删除历史任务时，会同时删除数据库记录和该任务对应的上传文件
+
+### Rust / Candle 推理后端
+
+Rust 项目位于 `/root/autodl-tmp/PV-IQA-rs`，提供：
+
+- `GET /health`
+- `POST /score/image`
+- `POST /score/batch`
+
+#### 导出 Rust 可用模型
+
+```bash
+uv run pv-iqa export-rust-model --run-name <run-name>
+```
+
+默认会把导出产物写到对应 checkpoint 同目录：
+
+```text
+checkpoints/<run-name>/iqa/best.pt
+checkpoints/<run-name>/iqa/best.onnx
+checkpoints/<run-name>/iqa/best.onnx.json
+```
+
+- `best.onnx` 为**单文件** ONNX，Rust 侧直接加载
+- 如果导出过程中产生 `best.onnx.data`，工具会自动内联权重并删除该 sidecar
+- 导出逻辑位于 `src/pv_iqa/utils/export_onnx.py`
+
+#### 手动启动 Rust 服务
+
+```bash
+cd /root/autodl-tmp/PV-IQA-rs
+PV_IQA_REPO_ROOT=/root/workspace/PV-IQA cargo run --release
+```
+
+Rust 服务默认监听 `127.0.0.1:7007`，可通过以下环境变量覆盖：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PV_IQA_REPO_ROOT` | `/root/workspace/PV-IQA` | PV-IQA 仓库根目录 |
+| `PV_IQA_RS_HOST` | `127.0.0.1` | Rust 服务监听地址 |
+| `PV_IQA_RS_PORT` | `7007` | Rust 服务监听端口 |
+| `PV_IQA_RS_DEVICE` | `auto` | 运行设备：`auto` / `cpu` / `cuda` |
+| `PV_IQA_RS_CUDA_ORDINAL` | `0` | CUDA 设备编号 |
+
+#### Bun 桥接层环境变量
+
+`app/server.ts` 还支持以下 Rust 相关配置：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PV_IQA_RS_URL` | `http://127.0.0.1:7007` | Bun 访问 Rust 服务的地址 |
+| `PV_IQA_RS_PROJECT_ROOT` | `/root/autodl-tmp/PV-IQA-rs` | Rust 项目目录；仅在缺少可执行文件时用于构建/发布 |
+| `PV_IQA_RS_BINARY` | `""` | 指定要直接启动的 Rust 可执行文件；可用仓库相对路径或绝对路径 |
+| `PV_IQA_RS_AUTOSTART` | `1` | Rust 不可用时是否自动拉起已发布二进制 |
+| `PV_IQA_RS_RELEASE` | `1` | 缺少二进制时，发布步骤默认使用 `cargo build --release` |
+| `PV_IQA_RS_CARGO_FEATURES` | `""` | 透传给 Cargo 的 feature；CUDA 用 `cuda`，可选 `cudnn` |
+| `PV_IQA_RS_HEALTH_TIMEOUT_MS` | `1500` | 健康检查超时 |
+| `PV_IQA_RS_REQUEST_TIMEOUT_MS` | `300000` | Rust 推理请求超时 |
+| `PV_IQA_RS_START_TIMEOUT_MS` | `300000` | 自动拉起服务后的等待时长 |
+
+当工作台选择 `Rust` 后端时：
+
+1. Bun 会先确认 `best.onnx` / `best.onnx.json` 是否存在
+2. 若缺失则自动执行 `uv run pv-iqa export-rust-model --run-name <run-name>`
+3. 若 `bin/` 中已有匹配当前配置的二进制，则直接使用最新版本启动
+4. 若缺少二进制，则从 `PV_IQA_RS_PROJECT_ROOT` 构建一次，并复制为 `bin/pv-iqa-rs-<profile>-<feature>-<timestamp>`
+5. 任务结果会在 SQLite 中记录所使用的 `backend`
+
+### 性能对比（当前环境）
+
+开启 release 模式并保持 Rust 服务常驻后，当前环境下的实测结果为：
+
+| 场景 | 耗时 |
+| --- | --- |
+| Rust CPU release `/score/image` warm 单图平均耗时 | `~0.45s` |
+| Rust CUDA release `/score/image` warm 单图平均耗时 | `~0.28s` |
+| Bun `/api/score/image` 单图任务从提交到完成（Rust CPU release） | `~0.48s` |
+
+如果看到 4s 以上的耗时，通常不是模型计算本身慢，而是 Rust 服务以 debug 版本运行，或 `bin/` 中还没有现成二进制，导致首次发布阶段触发了 `cargo build`。正常情况下，后续启动都会直接复用 `PV-IQA/bin` 中已发布的可执行文件。
 
 
 ## 说明

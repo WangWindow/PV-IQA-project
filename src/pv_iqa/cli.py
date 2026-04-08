@@ -15,6 +15,7 @@ from pv_iqa.train.recognition import (
 )
 from pv_iqa.utils.common import ensure_dir, set_seed
 from pv_iqa.utils.datasets import build_metadata
+from pv_iqa.utils.export_onnx import export_iqa_onnx
 
 app = typer.Typer(help="PV-IQA full pipeline CLI")
 
@@ -87,6 +88,17 @@ def evaluate_command(
     erc_path = evaluate_erc(config, quality_frame)
     typer.echo(f"run directory: {config.experiment_dir}")
     typer.echo(f"erc metrics saved: {erc_path}")
+
+
+@app.command("export-rust-model")
+def export_rust_model_command(
+    config_path: str = "configs/default.yaml",
+    run_name: str | None = None,
+) -> None:
+    config = _load(config_path, run_name=run_name)
+    onnx_path = export_iqa_onnx(config)
+    typer.echo(f"run directory: {config.experiment_dir}")
+    typer.echo(f"rust model exported: {onnx_path}")
 
 
 @app.command("detect-folder")

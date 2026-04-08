@@ -5,6 +5,7 @@ import { Eye, FolderClock, Image as ImageIcon, Trash2 } from "lucide-react"
 import type { DemoDashboard } from "@/hooks/use-demo-dashboard"
 import {
   averageScore,
+  backendText,
   clampPercentage,
   formatTime,
   qualityLabel,
@@ -89,6 +90,7 @@ function JobList({
               <div className="flex items-center gap-2">
                 <Badge variant="outline">{job.kind === "image" ? "单图" : "文件夹"}</Badge>
                 <Badge variant={statusVariant(job.status)}>{statusText(job.status)}</Badge>
+                <Badge variant="outline">{backendText(job.backend)}</Badge>
               </div>
               <div className="text-xs text-muted-foreground">{job.result_count} 条</div>
             </div>
@@ -112,15 +114,15 @@ function JobList({
 function DetailEmpty() {
   return (
     <Empty className="border bg-muted/20">
-      <EmptyHeader>
-        <EmptyMedia variant="icon">
-          <FolderClock />
-        </EmptyMedia>
-        <EmptyTitle>选择一条历史任务</EmptyTitle>
-        <EmptyDescription>在左侧任务列表中查看任意一次评分结果。</EmptyDescription>
-      </EmptyHeader>
-    </Empty>
-  )
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <FolderClock />
+          </EmptyMedia>
+          <EmptyTitle>选择一条历史任务</EmptyTitle>
+          <EmptyDescription>从列表中选择任务查看详情。</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
 }
 
 export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
@@ -146,19 +148,19 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
       exit={{ opacity: 0, y: -16 }}
       transition={{ duration: 0.22, ease: "easeOut" }}
       className="flex flex-col gap-6"
-    >
-      {dashboard.error ? (
-        <Alert variant="destructive">
-          <AlertTitle>操作失败</AlertTitle>
-          <AlertDescription>{dashboard.error}</AlertDescription>
-        </Alert>
-      ) : null}
+      >
+        {dashboard.error ? (
+          <Alert variant="destructive">
+            <AlertTitle>操作失败</AlertTitle>
+            <AlertDescription>{dashboard.error}</AlertDescription>
+          </Alert>
+        ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>任务管理</CardTitle>
-          <CardDescription>查看批量结果、删除历史记录、追踪当前处理任务。</CardDescription>
-          <CardAction className="hidden md:block">
+        <Card>
+          <CardHeader>
+            <CardTitle>任务管理</CardTitle>
+            <CardDescription>筛选、查看和删除历史任务。</CardDescription>
+            <CardAction className="hidden md:block">
             <div className="flex items-center gap-2">
               <Badge variant="outline">{dashboard.jobs.length} 总任务</Badge>
               <Badge variant="outline">{dashboard.activeRunningCount} 处理中</Badge>
@@ -181,7 +183,7 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
               <SheetContent side="right">
                 <SheetHeader>
                   <SheetTitle>历史任务</SheetTitle>
-                  <SheetDescription>选择一条任务查看详细结果。</SheetDescription>
+                  <SheetDescription>选择任务查看详情。</SheetDescription>
                 </SheetHeader>
                 <div className="px-4">
                   <JobList dashboard={dashboard} jobs={filteredJobs} onPick={() => setMobileSheetOpen(false)} />
@@ -220,7 +222,7 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
         <Card className="hidden lg:flex">
           <CardHeader>
             <CardTitle>历史列表</CardTitle>
-            <CardDescription>保留管理视图，不再挤占工作台空间。</CardDescription>
+            <CardDescription>按时间倒序显示。</CardDescription>
           </CardHeader>
           <CardContent>
             {filteredJobs.length ? (
@@ -231,7 +233,7 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
               <Empty className="border bg-muted/20">
                 <EmptyHeader>
                   <EmptyTitle>没有匹配任务</EmptyTitle>
-                  <EmptyDescription>切换筛选条件或先创建新的评分任务。</EmptyDescription>
+                  <EmptyDescription>切换筛选条件或先提交任务。</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             )}
@@ -241,9 +243,7 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
         <Card>
           <CardHeader>
             <CardTitle>任务详情</CardTitle>
-            <CardDescription>
-              {selectedJob ? `当前查看：${selectedJob.run_name}` : "可查看结果、删除任务和分析批量样本。"}
-            </CardDescription>
+            <CardDescription>{selectedJob ? `Run ${selectedJob.run_name}` : "选择一条任务查看详情。"}</CardDescription>
             {selectedJob ? (
               <CardAction>
                 <Button
@@ -275,13 +275,18 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline">{selectedJob.kind === "image" ? "单图" : "文件夹"}</Badge>
                     <Badge variant={statusVariant(selectedJob.status)}>{statusText(selectedJob.status)}</Badge>
+                    <Badge variant="outline">{backendText(selectedJob.backend)}</Badge>
                     <Badge variant="outline">{selectedJob.result_count} 结果</Badge>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-4">
                     <div className="rounded-2xl border bg-muted/30 p-4">
                       <div className="text-sm text-muted-foreground">创建时间</div>
                       <div className="mt-2 font-medium">{formatTime(selectedJob.created_at)}</div>
+                    </div>
+                    <div className="rounded-2xl border bg-muted/30 p-4">
+                      <div className="text-sm text-muted-foreground">Run</div>
+                      <div className="mt-2 break-all font-medium">{selectedJob.run_name}</div>
                     </div>
                     <div className="rounded-2xl border bg-muted/30 p-4">
                       <div className="text-sm text-muted-foreground">处理状态</div>

@@ -1,4 +1,4 @@
-import type { HealthResponse, JobRecord, JobSummary, UploadItem } from "@/lib/types"
+import type { HealthResponse, InferenceBackend, JobRecord, JobSummary, UploadItem } from "@/lib/types"
 
 async function unwrapJson<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as T & { error?: string }
@@ -9,16 +9,20 @@ async function unwrapJson<T>(response: Response): Promise<T> {
 }
 
 export async function fetchHealth(): Promise<HealthResponse> {
-  return unwrapJson<HealthResponse>(await fetch("/api/health"))
+  return unwrapJson<HealthResponse>(await fetch("/api/health", { cache: "no-store" }))
 }
 
 export async function fetchJobs(): Promise<JobSummary[]> {
-  const payload = await unwrapJson<{ jobs: JobSummary[] }>(await fetch("/api/jobs"))
+  const payload = await unwrapJson<{ jobs: JobSummary[] }>(
+    await fetch("/api/jobs", { cache: "no-store" })
+  )
   return payload.jobs
 }
 
 export async function fetchJob(jobId: string): Promise<JobRecord> {
-  const payload = await unwrapJson<{ job: JobRecord }>(await fetch(`/api/jobs/${jobId}`))
+  const payload = await unwrapJson<{ job: JobRecord }>(
+    await fetch(`/api/jobs/${jobId}`, { cache: "no-store" })
+  )
   return payload.job
 }
 
@@ -30,9 +34,14 @@ export async function deleteJob(jobId: string): Promise<void> {
   )
 }
 
-export async function submitSingleImage(file: File, runName?: string): Promise<JobRecord> {
+export async function submitSingleImage(
+  file: File,
+  backend: InferenceBackend,
+  runName?: string
+): Promise<JobRecord> {
   const formData = new FormData()
   formData.append("file", file)
+  formData.append("backend", backend)
   if (runName) {
     formData.append("runName", runName)
   }
@@ -45,7 +54,11 @@ export async function submitSingleImage(file: File, runName?: string): Promise<J
   return payload.job
 }
 
-export async function submitFolder(items: UploadItem[], runName?: string): Promise<JobRecord> {
+export async function submitFolder(
+  items: UploadItem[],
+  backend: InferenceBackend,
+  runName?: string
+): Promise<JobRecord> {
   const formData = new FormData()
   const manifest = items.map((item) => ({
     name: item.file.name,
@@ -56,6 +69,7 @@ export async function submitFolder(items: UploadItem[], runName?: string): Promi
     formData.append("files", item.file)
   }
   formData.append("manifest", JSON.stringify(manifest))
+  formData.append("backend", backend)
 
   if (runName) {
     formData.append("runName", runName)

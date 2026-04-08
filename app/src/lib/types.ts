@@ -1,5 +1,6 @@
 export type JobKind = "image" | "folder"
 export type JobStatus = "running" | "completed" | "failed"
+export type InferenceBackend = "python" | "rust"
 
 export type UploadItem = {
   file: File
@@ -19,6 +20,7 @@ export type JobSummary = {
   id: string
   kind: JobKind
   status: JobStatus
+  backend: InferenceBackend
   run_name: string
   input_count: number
   processed_count: number
@@ -35,9 +37,22 @@ export type JobRecord = JobSummary & {
   results: ScoreResult[]
 }
 
+export type BackendHealth = {
+  available: boolean
+  label: string
+  state?: "ready" | "starting" | "idle" | "error"
+  detail?: string
+  device?: string
+  error?: string
+}
+
 export type HealthResponse = {
   status: "ok" | "degraded"
   port: number
   defaultRunName?: string
   error?: string
+  backends: {
+    python: BackendHealth
+    rust: BackendHealth
+  }
 }

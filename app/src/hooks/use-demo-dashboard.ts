@@ -8,7 +8,13 @@ import {
   submitFolder,
   submitSingleImage,
 } from "@/lib/api"
-import type { HealthResponse, JobRecord, JobSummary, UploadItem } from "@/lib/types"
+import type {
+  HealthResponse,
+  InferenceBackend,
+  JobRecord,
+  JobSummary,
+  UploadItem,
+} from "@/lib/types"
 import { averageScore } from "@/lib/demo-format"
 import { filesToUploadItems, readDroppedItems } from "@/lib/uploads"
 
@@ -19,6 +25,7 @@ export type DemoDashboardState = {
   health: HealthResponse | null
   jobs: JobSummary[]
   selectedJob: JobRecord | null
+  backend: InferenceBackend
   runName: string
   singleFile: File | null
   folderItems: UploadItem[]
@@ -37,6 +44,7 @@ export type DemoDashboardState = {
 
 export type DemoDashboardActions = {
   setMode: (mode: UploadMode) => void
+  setBackend: (backend: InferenceBackend) => void
   setRunName: (value: string) => void
   setDragging: (value: boolean) => void
   clearError: () => void
@@ -51,12 +59,57 @@ export type DemoDashboardActions = {
 
 export type DemoDashboard = DemoDashboardState & DemoDashboardActions
 
+type DemoDashboardPreferences = {
+  backend?: InferenceBackend
+  runName?: string
+}
+
+const DASHBOARD_PREFERENCES_KEY = "pv-iqa-demo-preferences:v1"
+
+function readDashboardPreferences(): DemoDashboardPreferences {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  try {
+    const raw = window.localStorage.getItem(DASHBOARD_PREFERENCES_KEY)
+    if (!raw) {
+      return {}
+    }
+
+    const parsed = JSON.parse(raw) as DemoDashboardPreferences
+    return {
+      backend: parsed.backend === "python" || parsed.backend === "rust" ? parsed.backend : undefined,
+      runName: typeof parsed.runName === "string" ? parsed.runName : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+function writeDashboardPreferences(preferences: {
+  backend: InferenceBackend
+  runName: string
+}): void {
+  if (typeof window === "undefined") {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(DASHBOARD_PREFERENCES_KEY, JSON.stringify(preferences))
+  } catch {
+    // Ignore transient storage failures and keep the in-memory state.
+  }
+}
+
 export function useDemoDashboard(): DemoDashboard {
+  const [storedPreferences] = useState<DemoDashboardPreferences>(() => readDashboardPreferences())
   const [mode, setMode] = useState<UploadMode>("image")
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [jobs, setJobs] = useState<JobSummary[]>([])
   const [selectedJob, setSelectedJob] = useState<JobRecord | null>(null)
-  const [runName, setRunName] = useState("")
+  const [backend, setBackend] = useState<InferenceBackend>(storedPreferences.backend ?? "python")
+  const [runName, setRunName] = useState(storedPreferences.runName ?? "")
   const [singleFile, setSingleFile] = useState<File | null>(null)
   const [folderItems, setFolderItems] = useState<UploadItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -64,6 +117,12 @@ export function useDemoDashboard(): DemoDashboard {
   const [isDragging, setIsDragging] = useState(false)
   const [deletingJobId, setDeletingJobId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const refreshHealth = useCallback(async () => {
+    const nextHealth = await fetchHealth()
+    setHealth(nextHealth)
+    return nextHealth
+  }, [])
 
   const refreshJobs = useCallback(async () => {
     const nextJobs = await fetchJobs()
@@ -76,14 +135,12 @@ export function useDemoDashboard(): DemoDashboard {
 
     async function bootstrap() {
       try {
-        const [nextHealth, nextJobs] = await Promise.all([fetchHealth(), fetchJobs()])
+        const [, nextJobs] = await Promise.all([refreshHealth(), fetchJobs()])
         if (disposed) {
           return
         }
 
-        setHealth(nextHealth)
         setJobs(nextJobs)
-        setRunName(nextHealth.defaultRunName ?? "")
 
         if (nextJobs[0]) {
           const initialJob = await fetchJob(nextJobs[0].id)
@@ -107,7 +164,36 @@ export function useDemoDashboard(): DemoDashboard {
     return () => {
       disposed = true
     }
-  }, [])
+  }, [refreshHealth])
+
+  useEffect(() => {
+    if (isLoading) {
+      return
+    }
+
+    let disposed = false
+    const intervalMs = health?.backends.rust.state === "starting" ? 2000 : 10000
+
+    async function pollHealth() {
+      try {
+        const nextHealth = await fetchHealth()
+        if (!disposed) {
+          setHealth(nextHealth)
+        }
+      } catch {
+        // Keep the last known health on transient polling failures.
+      }
+    }
+
+    const timer = window.setInterval(() => {
+      void pollHealth()
+    }, intervalMs)
+
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [health?.backends.rust.state, isLoading])
 
   const selectedJobId = selectedJob?.id ?? null
   const hasRunningJob =
@@ -155,6 +241,17 @@ export function useDemoDashboard(): DemoDashboard {
     }
   }, [hasRunningJob, selectedJobId])
 
+  useEffect(() => {
+    if (backend !== "rust") {
+      return
+    }
+    void refreshHealth().catch(() => undefined)
+  }, [backend, refreshHealth])
+
+  useEffect(() => {
+    writeDashboardPreferences({ backend, runName })
+  }, [backend, runName])
+
   const selectedResults = useMemo(
     () => [...(selectedJob?.results ?? [])].sort((left, right) => right.quality_score - left.quality_score),
     [selectedJob]
@@ -201,17 +298,17 @@ export function useDemoDashboard(): DemoDashboard {
       const effectiveRunName = runName.trim() || health?.defaultRunName
       let nextJob: JobRecord
 
-      if (mode === "image") {
-        if (!singleFile) {
-          throw new Error("请先选择一张图片。")
+        if (mode === "image") {
+          if (!singleFile) {
+            throw new Error("请先选择一张图片。")
+          }
+          nextJob = await submitSingleImage(singleFile, backend, effectiveRunName)
+        } else {
+          if (!folderItems.length) {
+            throw new Error("请先选择一个文件夹。")
+          }
+          nextJob = await submitFolder(folderItems, backend, effectiveRunName)
         }
-        nextJob = await submitSingleImage(singleFile, effectiveRunName)
-      } else {
-        if (!folderItems.length) {
-          throw new Error("请先选择一个文件夹。")
-        }
-        nextJob = await submitFolder(folderItems, effectiveRunName)
-      }
 
       setSelectedJob(nextJob)
       await refreshJobs()
@@ -221,7 +318,7 @@ export function useDemoDashboard(): DemoDashboard {
     } finally {
       setIsSubmitting(false)
     }
-  }, [folderItems, health?.defaultRunName, mode, refreshJobs, resetUploads, runName, singleFile])
+  }, [backend, folderItems, health?.defaultRunName, mode, refreshJobs, resetUploads, runName, singleFile])
 
   const selectJob = useCallback(async (jobId: string) => {
     try {
@@ -261,6 +358,7 @@ export function useDemoDashboard(): DemoDashboard {
     health,
     jobs,
     selectedJob,
+    backend,
     runName,
     singleFile,
     folderItems,
@@ -276,6 +374,7 @@ export function useDemoDashboard(): DemoDashboard {
     completedCount,
     failedCount,
     setMode,
+    setBackend,
     setRunName,
     setDragging: setIsDragging,
     clearError,

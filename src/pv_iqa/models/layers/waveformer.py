@@ -7,19 +7,34 @@ import torch.nn.functional as F
 from torch import nn
 
 
-class LayerNorm2d(nn.LayerNorm):
-    """LayerNorm for BCHW tensors."""
+class ChannelLayerNorm2d(nn.Module):
+    def __init__(self, channels: int, *, eps: float = 1e-5) -> None:
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(channels))
+        self.bias = nn.Parameter(torch.zeros(channels))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        normalized = x.permute(0, 2, 3, 1).contiguous()
-        normalized = F.layer_norm(
-            normalized,
-            self.normalized_shape,
-            self.weight,
-            self.bias,
-            self.eps,
-        )
-        return normalized.permute(0, 3, 1, 2).contiguous()
+        mean = x.mean(dim=1, keepdim=True)
+        centered = x - mean
+        variance = centered.square().mean(dim=1, keepdim=True)
+        normalized = centered / torch.sqrt(variance + self.eps)
+        return normalized * self.weight.view(1, -1, 1, 1) + self.bias.view(1, -1, 1, 1)
+
+
+class ChannelLastLayerNorm(nn.Module):
+    def __init__(self, channels: int, *, eps: float = 1e-5) -> None:
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(channels))
+        self.bias = nn.Parameter(torch.zeros(channels))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        mean = x.mean(dim=-1, keepdim=True)
+        centered = x - mean
+        variance = centered.square().mean(dim=-1, keepdim=True)
+        normalized = centered / torch.sqrt(variance + self.eps)
+        return normalized * self.weight.view(1, 1, 1, -1) + self.bias.view(1, 1, 1, -1)
 
 
 class FeedForward2d(nn.Module):
@@ -52,7 +67,7 @@ class WaveOperator2D(nn.Module):
         )
         self.proj_in = nn.Linear(channels, channels * 2)
         self.proj_out = nn.Linear(channels, channels)
-        self.output_norm = nn.LayerNorm(channels)
+        self.output_norm = ChannelLastLayerNorm(channels)
         self.to_phase = nn.Sequential(
             nn.Linear(channels, channels),
             nn.GELU(),
@@ -62,72 +77,92 @@ class WaveOperator2D(nn.Module):
         self.frequency_embed = nn.Parameter(
             torch.zeros(base_resolution, base_resolution, channels)
         )
+        self.register_buffer(
+            "cos_h",
+            self._build_cosine_basis(base_resolution),
+            persistent=False,
+        )
+        self.register_buffer(
+            "cos_w",
+            self._build_cosine_basis(base_resolution),
+            persistent=False,
+        )
         nn.init.trunc_normal_(self.frequency_embed, std=0.02)
 
     @staticmethod
-    def _cosine_basis(
-        size: int,
-        *,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        positions = (torch.arange(size, device=device, dtype=dtype).view(1, -1) + 0.5) / size
-        frequencies = torch.arange(size, device=device, dtype=dtype).view(-1, 1)
+    def _build_cosine_basis(size: int) -> torch.Tensor:
+        positions = (torch.arange(size, dtype=torch.float32).view(1, -1) + 0.5) / size
+        frequencies = torch.arange(size, dtype=torch.float32).view(-1, 1)
         basis = torch.cos(frequencies * positions * math.pi) * math.sqrt(2.0 / size)
         basis[0, :] = basis[0, :] / math.sqrt(2.0)
         return basis
 
-    @staticmethod
-    def _dct2d(
-        x: torch.Tensor,
-        cos_h: torch.Tensor,
-        cos_w: torch.Tensor,
-    ) -> torch.Tensor:
-        transformed = torch.einsum("bhwc,nh->bnwc", x, cos_h)
-        return torch.einsum("bnwc,mw->bnmc", transformed, cos_w)
-
-    @staticmethod
-    def _idct2d(
-        x: torch.Tensor,
-        cos_h: torch.Tensor,
-        cos_w: torch.Tensor,
-    ) -> torch.Tensor:
-        reconstructed = torch.einsum("bnmc,wm->bnwc", x, cos_w.transpose(0, 1))
-        return torch.einsum("bnwc,hn->bhwc", reconstructed, cos_h.transpose(0, 1))
-
-    def _resize_frequency_embed(
-        self,
-        height: int,
-        width: int,
-    ) -> torch.Tensor:
-        freq = self.frequency_embed.permute(2, 0, 1).unsqueeze(0)
-        if freq.shape[-2:] != (height, width):
-            freq = F.interpolate(
-                freq,
-                size=(height, width),
-                mode="bicubic",
-                align_corners=False,
+    def _resolve_basis(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        height, width = x.shape[1:3]
+        if height != self.base_resolution or width != self.base_resolution:
+            raise ValueError(
+                f"WaveFormer expects {self.base_resolution}x{self.base_resolution} features, "
+                f"received {height}x{width}."
             )
-        return freq.squeeze(0).permute(1, 2, 0).contiguous()
+        return self.cos_h.to(dtype=x.dtype), self.cos_w.to(dtype=x.dtype)
+
+    def _dct2d(self, x: torch.Tensor) -> torch.Tensor:
+        batch, height, width, channels = x.shape
+        cos_h, cos_w = self._resolve_basis(x)
+        transformed = (
+            x.permute(0, 2, 3, 1)
+            .contiguous()
+            .reshape(batch * width * channels, height)
+            .matmul(cos_h.transpose(0, 1))
+            .reshape(batch, width, channels, height)
+            .permute(0, 3, 1, 2)
+            .contiguous()
+        )
+        return (
+            transformed.permute(0, 1, 3, 2)
+            .contiguous()
+            .reshape(batch * height * channels, width)
+            .matmul(cos_w.transpose(0, 1))
+            .reshape(batch, height, channels, width)
+            .permute(0, 1, 3, 2)
+            .contiguous()
+        )
+
+    def _idct2d(self, x: torch.Tensor) -> torch.Tensor:
+        batch, height, width, channels = x.shape
+        cos_h, cos_w = self._resolve_basis(x)
+        reconstructed = (
+            x.permute(0, 1, 3, 2)
+            .contiguous()
+            .reshape(batch * height * channels, width)
+            .matmul(cos_w)
+            .reshape(batch, height, channels, width)
+            .permute(0, 1, 3, 2)
+            .contiguous()
+        )
+        return (
+            reconstructed.permute(0, 2, 3, 1)
+            .contiguous()
+            .reshape(batch * width * channels, height)
+            .matmul(cos_h)
+            .reshape(batch, width, channels, height)
+            .permute(0, 3, 1, 2)
+            .contiguous()
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch, _, height, width = x.shape
+        batch = x.shape[0]
         mixed = self.depthwise(x).permute(0, 2, 3, 1).contiguous()
         carrier, gate = self.proj_in(mixed).chunk(2, dim=-1)
-
-        cos_h = self._cosine_basis(height, device=x.device, dtype=x.dtype)
-        cos_w = self._cosine_basis(width, device=x.device, dtype=x.dtype)
-        spectral = self._dct2d(carrier, cos_h, cos_w)
-
-        phase_embed = self._resize_frequency_embed(height, width)
-        phase = self.to_phase(phase_embed).unsqueeze(0).expand(batch, -1, -1, -1)
+        spectral = self._dct2d(carrier)
+        phase = self.to_phase(self.frequency_embed).unsqueeze(0).expand(batch, -1, -1, -1)
         wave_phase = self.wave_speed * phase
 
         wave_term = torch.cos(wave_phase) * spectral
         velocity_scale = torch.sin(wave_phase) / self.wave_speed.abs().clamp_min(1e-6)
         velocity_term = velocity_scale * (spectral + 0.5 * self.damping * spectral)
 
-        fused = self._idct2d(wave_term + velocity_term, cos_h, cos_w)
+        fused = self._idct2d(wave_term + velocity_term)
         fused = self.output_norm(fused)
         fused = fused * F.silu(gate)
         return self.proj_out(fused).permute(0, 3, 1, 2).contiguous()
@@ -144,9 +179,9 @@ class WaveFormerLayer(nn.Module):
         mlp_ratio: float,
     ) -> None:
         super().__init__()
-        self.wave_norm = LayerNorm2d(channels)
+        self.wave_norm = ChannelLayerNorm2d(channels)
         self.wave = WaveOperator2D(channels, base_resolution=base_resolution)
-        self.ffn_norm = LayerNorm2d(channels)
+        self.ffn_norm = ChannelLayerNorm2d(channels)
         self.ffn = FeedForward2d(channels, mlp_ratio=mlp_ratio)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { ChangeEvent, DragEvent } from "react"
 import { Link } from "react-router-dom"
 import { AnimatePresence, motion } from "motion/react"
-import { FolderOpen, ImagePlus, ListFilter, Sparkles, UploadCloud } from "lucide-react"
+import { ChevronDown, FolderOpen, ImagePlus, ListFilter, SlidersHorizontal, UploadCloud } from "lucide-react"
 
 import type { DemoDashboard } from "@/hooks/use-demo-dashboard"
+import type { BackendHealth } from "@/lib/types"
 import {
+  backendDeviceText,
+  backendHintText,
+  backendText,
   clampPercentage,
   compactFileSize,
   formatTime,
@@ -122,7 +126,7 @@ function UploadDropzone({
             </div>
           ) : (
             <div className="rounded-2xl bg-background/80 p-4 text-sm text-muted-foreground">
-              直接把待测图片拖进来，然后立即评分。
+              拖入后即可提交评分。
             </div>
           )
         ) : (
@@ -146,7 +150,7 @@ function UploadDropzone({
               </div>
             ) : (
               <div className="mt-3 text-sm text-muted-foreground">
-                保留目录结构，适合一次性评估整批样本。
+                保留相对路径，适合批量评估。
               </div>
             )}
           </div>
@@ -178,6 +182,7 @@ function ProcessingState({ dashboard }: { dashboard: DemoDashboard }) {
             处理中
           </Badge>
           <Badge variant="outline">{selectedJob.kind === "image" ? "单图" : "文件夹"}</Badge>
+          <Badge variant="outline">{backendText(selectedJob.backend)}</Badge>
         </div>
         <div className="text-sm text-muted-foreground">
           {selectedJob.processed_count}/{selectedJob.input_count}
@@ -212,15 +217,106 @@ function ProcessingState({ dashboard }: { dashboard: DemoDashboard }) {
   )
 }
 
+function AdvancedOptions({
+  dashboard,
+  activeBackend,
+  pythonBackend,
+  rustBackend,
+}: {
+  dashboard: DemoDashboard
+  activeBackend?: BackendHealth | null
+  pythonBackend?: BackendHealth | null
+  rustBackend?: BackendHealth | null
+}) {
+  const [open, setOpen] = useState(false)
+  const runSummary = dashboard.runName.trim()
+    ? `Run ${dashboard.runName.trim()}`
+    : `默认 Run ${dashboard.health?.defaultRunName ?? "未发现"}`
+
+  return (
+    <div className="rounded-2xl border bg-muted/20">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left"
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex size-9 items-center justify-center rounded-xl bg-background text-muted-foreground">
+            <SlidersHorizontal className="size-4" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <div className="text-sm font-medium">高级选项</div>
+            <div className="text-sm text-muted-foreground">
+              {backendText(dashboard.backend)} · {runSummary}
+            </div>
+          </div>
+        </div>
+        <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition", open && "rotate-180")} />
+      </button>
+
+      {open ? (
+        <div className="border-t px-4 pb-4 pt-4">
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="run-name">推理 Run</FieldLabel>
+              <FieldContent>
+                <Input
+                  id="run-name"
+                  value={dashboard.runName}
+                  onChange={(event) => dashboard.setRunName(event.target.value)}
+                  placeholder={dashboard.health?.defaultRunName ?? "自动选择最新可用 run"}
+                />
+                <FieldDescription>留空时使用当前默认 checkpoint。</FieldDescription>
+              </FieldContent>
+            </Field>
+
+            <Field>
+              <FieldLabel>推理后端</FieldLabel>
+              <FieldContent>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  value={dashboard.backend}
+                  onValueChange={(value) => {
+                    if (value === "python" || value === "rust") {
+                      dashboard.setBackend(value)
+                    }
+                  }}
+                >
+                  <ToggleGroupItem value="python" aria-label="使用 Python 后端">
+                    Python
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="rust" aria-label="使用 Rust 后端">
+                    Rust
+                  </ToggleGroupItem>
+                </ToggleGroup>
+                <FieldDescription>{backendHintText(activeBackend)}</FieldDescription>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <Badge variant={dashboard.backend === "python" ? "secondary" : "outline"}>
+                    Python {backendDeviceText(pythonBackend)}
+                  </Badge>
+                  <Badge variant={dashboard.backend === "rust" ? "secondary" : "outline"}>
+                    Rust {backendDeviceText(rustBackend)}
+                  </Badge>
+                </div>
+              </FieldContent>
+            </Field>
+          </FieldGroup>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function EmptyResult() {
   return (
     <Empty className="border bg-muted/20">
       <EmptyHeader>
         <EmptyMedia variant="icon">
-          <Sparkles />
+          <ImagePlus />
         </EmptyMedia>
-        <EmptyTitle>结果会显示在这里</EmptyTitle>
-        <EmptyDescription>先上传图片，界面会自动切换到当前任务结果。</EmptyDescription>
+        <EmptyTitle>暂无结果</EmptyTitle>
+        <EmptyDescription>提交任务后会在这里显示结果。</EmptyDescription>
       </EmptyHeader>
     </Empty>
   )
@@ -233,7 +329,7 @@ function RecentJobs({ dashboard }: { dashboard: DemoDashboard }) {
     <Card>
       <CardHeader>
         <CardTitle>最近任务</CardTitle>
-        <CardDescription>常用查看入口，完整管理在任务页。</CardDescription>
+        <CardDescription>最近 4 条任务。</CardDescription>
         <CardAction>
           <Button asChild variant="ghost" size="sm">
             <Link to="/jobs">
@@ -260,6 +356,7 @@ function RecentJobs({ dashboard }: { dashboard: DemoDashboard }) {
                   <div className="flex items-center gap-2">
                     <Badge variant="outline">{job.kind === "image" ? "单图" : "文件夹"}</Badge>
                     <Badge variant={statusVariant(job.status)}>{statusText(job.status)}</Badge>
+                    <Badge variant="outline">{backendText(job.backend)}</Badge>
                   </div>
                   <div className="text-xs text-muted-foreground">{job.result_count} 结果</div>
                 </div>
@@ -271,13 +368,13 @@ function RecentJobs({ dashboard }: { dashboard: DemoDashboard }) {
             ))}
           </div>
         ) : (
-          <Empty className="border bg-muted/20">
-            <EmptyHeader>
-              <EmptyTitle>还没有任务</EmptyTitle>
-              <EmptyDescription>上传一张图片后，这里会保留最近记录。</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        )}
+            <Empty className="border bg-muted/20">
+              <EmptyHeader>
+                <EmptyTitle>还没有任务</EmptyTitle>
+                <EmptyDescription>提交后会在这里显示。</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          )}
       </CardContent>
     </Card>
   )
@@ -326,6 +423,9 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
   const selectedJob = dashboard.selectedJob
   const isImageResult = selectedJob?.kind === "image" && dashboard.topResult
   const isFolderResult = selectedJob?.kind === "folder" && dashboard.selectedResults.length
+  const pythonBackend = dashboard.health?.backends.python
+  const rustBackend = dashboard.health?.backends.rust
+  const activeBackend = dashboard.backend === "python" ? pythonBackend : rustBackend
 
   return (
     <motion.div
@@ -334,22 +434,21 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
       exit={{ opacity: 0, y: -16 }}
       transition={{ duration: 0.22, ease: "easeOut" }}
       className="flex flex-col gap-6"
-    >
-      {dashboard.error ? (
-        <Alert variant="destructive">
-          <AlertTitle>操作失败</AlertTitle>
-          <AlertDescription>{dashboard.error}</AlertDescription>
-        </Alert>
-      ) : null}
+      >
+        {dashboard.error ? (
+          <Alert variant="destructive">
+            <AlertTitle>操作失败</AlertTitle>
+            <AlertDescription>{dashboard.error}</AlertDescription>
+          </Alert>
+        ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
-        <Card className="h-fit">
-          <CardHeader>
-            <CardTitle>开始评分</CardTitle>
-            <CardDescription>上传动作优先，其他信息尽量收敛。</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-5">
-            <FieldGroup>
+        <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
+          <Card className="h-fit">
+            <CardHeader>
+              <CardTitle>上传与评分</CardTitle>
+              <CardDescription>先选择 ROI 图像，再提交评分任务。</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-6">
               <Field>
                 <FieldLabel>评分模式</FieldLabel>
                 <FieldContent>
@@ -375,73 +474,74 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
                 </FieldContent>
               </Field>
 
-              <Field>
-                <FieldLabel htmlFor="run-name">推理 Run</FieldLabel>
-                <FieldContent>
-                  <Input
-                    id="run-name"
-                    value={dashboard.runName}
-                    onChange={(event) => dashboard.setRunName(event.target.value)}
-                    placeholder={dashboard.health?.defaultRunName ?? "自动选择最新可用 run"}
-                  />
-                  <FieldDescription>留空时自动使用当前最新可用 checkpoint。</FieldDescription>
-                </FieldContent>
-              </Field>
-            </FieldGroup>
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleImageInputChange}
+              />
+              <input
+                ref={folderInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={handleFolderInputChange}
+              />
 
-            <input
-              ref={imageInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleImageInputChange}
-            />
-            <input
-              ref={folderInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleFolderInputChange}
-            />
+              <UploadDropzone
+                dashboard={dashboard}
+                singlePreviewUrl={singlePreviewUrl}
+                onChoose={() => {
+                  if (dashboard.mode === "image") {
+                    imageInputRef.current?.click()
+                  } else {
+                    folderInputRef.current?.click()
+                  }
+                }}
+              />
 
-            <UploadDropzone
-              dashboard={dashboard}
-              singlePreviewUrl={singlePreviewUrl}
-              onChoose={() => {
-                if (dashboard.mode === "image") {
-                  imageInputRef.current?.click()
-                } else {
-                  folderInputRef.current?.click()
-                }
-              }}
-            />
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <Button
+                  className="flex-1"
+                  size="lg"
+                  onClick={() => void dashboard.submit()}
+                  disabled={dashboard.isSubmitting}
+                >
+                  {dashboard.isSubmitting ? (
+                    <>
+                      <Spinner data-icon="inline-start" />
+                      正在创建任务
+                    </>
+                  ) : (
+                    "立即评分"
+                  )}
+                </Button>
+                <Button variant="outline" size="lg" onClick={resetUploads} disabled={dashboard.isSubmitting}>
+                  清空
+                </Button>
+              </div>
 
-            <div className="flex gap-3">
-              <Button className="flex-1" size="lg" onClick={() => void dashboard.submit()} disabled={dashboard.isSubmitting}>
-                {dashboard.isSubmitting ? (
-                  <>
-                    <Spinner data-icon="inline-start" />
-                    正在创建任务
-                  </>
-                ) : (
-                  "立即评分"
-                )}
-              </Button>
-              <Button variant="outline" size="lg" onClick={resetUploads} disabled={dashboard.isSubmitting}>
-                清空
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              <AdvancedOptions
+                dashboard={dashboard}
+                activeBackend={activeBackend}
+                pythonBackend={pythonBackend}
+                rustBackend={rustBackend}
+              />
+            </CardContent>
+          </Card>
 
-        <div className="flex flex-col gap-6">
-          <Card>
+          <div className="flex flex-col gap-6">
+            <Card>
             <CardHeader>
               <CardTitle>当前结果</CardTitle>
-              <CardDescription>聚焦正在处理或当前选中的任务结果。</CardDescription>
+              <CardDescription>显示当前任务或最近一次结果。</CardDescription>
               {selectedJob ? (
                 <CardAction>
-                  <Badge variant={statusVariant(selectedJob.status)}>{statusText(selectedJob.status)}</Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={statusVariant(selectedJob.status)}>{statusText(selectedJob.status)}</Badge>
+                    <Badge variant="outline">{backendText(selectedJob.backend)}</Badge>
+                  </div>
                 </CardAction>
               ) : null}
             </CardHeader>

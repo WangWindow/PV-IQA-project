@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react"
 import { Link, NavLink } from "react-router-dom"
-import { Activity, FolderClock, LayoutDashboard, Menu } from "lucide-react"
+import { FolderClock, LayoutDashboard, Menu } from "lucide-react"
 
 import type { DemoDashboard } from "@/hooks/use-demo-dashboard"
 import { cn } from "@/lib/utils"
@@ -35,7 +35,6 @@ export function AppShell({
   dashboard: DemoDashboard
   children: ReactNode
 }) {
-  const serviceOnline = dashboard.health?.status === "ok"
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   return (
@@ -45,17 +44,14 @@ export function AppShell({
           <div className="flex items-center gap-3">
             <Link to="/workspace" className="flex flex-col">
               <span className="text-sm text-muted-foreground">PV-IQA</span>
-              <span className="text-lg font-semibold tracking-tight">掌静脉质量测评</span>
+              <span className="text-lg font-semibold tracking-tight">掌静脉质量评分</span>
             </Link>
-            <div className="hidden items-center gap-2 md:flex">
-              <Badge variant={serviceOnline ? "secondary" : "destructive"}>
-                <Activity data-icon="inline-start" />
-                {serviceOnline ? "服务在线" : "服务异常"}
-              </Badge>
-            </div>
           </div>
 
           <div className="hidden items-center gap-2 md:flex">
+            {dashboard.activeRunningCount ? (
+              <Badge variant="outline">{dashboard.activeRunningCount} 处理中</Badge>
+            ) : null}
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon
               return (
@@ -72,7 +68,9 @@ export function AppShell({
           </div>
 
           <div className="flex items-center gap-2 md:hidden">
-            <Badge variant="outline">{dashboard.activeRunningCount} 处理中</Badge>
+            {dashboard.activeRunningCount ? (
+              <Badge variant="outline">{dashboard.activeRunningCount} 处理中</Badge>
+            ) : null}
             <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
               <SheetTrigger asChild>
                 <Button variant="ghost" size="icon-sm">
@@ -82,17 +80,10 @@ export function AppShell({
               </SheetTrigger>
               <SheetContent side="right">
                 <SheetHeader>
-                  <SheetTitle>演示导航</SheetTitle>
-                  <SheetDescription>切换评分工作台或任务管理视图。</SheetDescription>
+                  <SheetTitle>导航</SheetTitle>
+                  <SheetDescription>切换工作台和任务管理。</SheetDescription>
                 </SheetHeader>
                 <div className="flex flex-col gap-3 px-4">
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant={serviceOnline ? "secondary" : "destructive"}>
-                      <Activity data-icon="inline-start" />
-                      {serviceOnline ? "在线" : "异常"}
-                    </Badge>
-                    <Badge variant="outline">Run {dashboard.health?.defaultRunName ?? "未发现"}</Badge>
-                  </div>
                   <div className="flex flex-col gap-2">
                     {NAV_ITEMS.map((item) => {
                       const Icon = item.icon
