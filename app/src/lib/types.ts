@@ -1,5 +1,5 @@
 export type JobKind = "image" | "folder"
-export type JobStatus = "running" | "completed" | "failed"
+export type JobStatus = "running" | "interrupted" | "completed" | "failed"
 export type InferenceBackend = "python" | "rust"
 
 export type UploadItem = {
@@ -31,6 +31,9 @@ export type JobSummary = {
   updated_at: string
   completed_at: string | null
   error: string | null
+  average_score: number | null
+  best_score: number | null
+  worst_score: number | null
 }
 
 export type JobRecord = JobSummary & {

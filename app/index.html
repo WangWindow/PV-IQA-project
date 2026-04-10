@@ -5,7 +5,24 @@
   <meta charset="UTF-8" />
   <link rel="icon" type="image/webp" href="/favicon.webp" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>app</title>
+  <title>PV-IQA Demo</title>
+  <script>
+    (() => {
+      const storageKey = "pv-iqa-theme-mode:v1"
+      const root = document.documentElement
+      const storedMode = localStorage.getItem(storageKey)
+      const mode = storedMode === "light" || storedMode === "dark" || storedMode === "system"
+        ? storedMode
+        : "system"
+      const resolved = mode === "system"
+        ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+        : mode
+      root.classList.toggle("dark", resolved === "dark")
+      root.style.colorScheme = resolved
+      root.dataset.theme = resolved
+      root.dataset.themeMode = mode
+    })()
+  </script>
 </head>
 
 <body>

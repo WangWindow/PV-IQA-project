@@ -6,26 +6,30 @@ import { ChevronDown, FolderOpen, ImagePlus, ListFilter, SlidersHorizontal, Uplo
 
 import type { DemoDashboard } from "@/hooks/use-demo-dashboard"
 import type { BackendHealth } from "@/lib/types"
+import { buildRankedScoreData, buildScoreDistribution } from "@/lib/demo-analytics"
 import {
   backendDeviceText,
   backendHintText,
   backendText,
   clampPercentage,
   compactFileSize,
+  formatScore,
   formatTime,
   qualityLabel,
   statusText,
   statusVariant,
 } from "@/lib/demo-format"
 import { cn } from "@/lib/utils"
+import { DemoDisclosure } from "@/components/demo/demo-disclosure"
+import { DemoImagePreview, type PreviewImage } from "@/components/demo/demo-image-preview"
+import { DemoStatCard } from "@/components/demo/demo-stat-card"
+import { RankedScoreChart, ScoreDistributionChart } from "@/components/demo/demo-charts"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -52,10 +56,12 @@ function UploadDropzone({
   dashboard,
   singlePreviewUrl,
   onChoose,
+  onPreview,
 }: {
   dashboard: DemoDashboard
   singlePreviewUrl: string | null
   onChoose: () => void
+  onPreview: (image: PreviewImage) => void
 }) {
   const isImageMode = dashboard.mode === "image"
   const folderPreview = dashboard.folderItems.slice(0, 3)
@@ -85,73 +91,79 @@ function UploadDropzone({
         }
       }}
       className={cn(
-        "rounded-3xl border border-dashed bg-muted/40 p-5 transition",
-        dashboard.isDragging
-          ? "border-primary bg-primary/5"
-          : "border-border hover:border-primary/40 hover:bg-muted/70",
+        "rounded-xl border border-dashed p-4 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        dashboard.isDragging ? "border-primary bg-primary/5" : "border-border bg-muted/10 hover:bg-muted/20",
         dashboard.isSubmitting && "pointer-events-none opacity-70"
       )}
     >
       <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-            <UploadCloud />
+        <div className="flex items-start gap-3">
+          <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-foreground">
+            <UploadCloud aria-hidden="true" className="size-4" />
           </div>
-          <div className="flex flex-col gap-1">
-            <div className="text-base font-medium">
-              {isImageMode ? "拖拽一张 ROI 图片" : "拖拽文件夹或多张 ROI 图片"}
-            </div>
-            <div className="text-sm text-muted-foreground">
-              {isImageMode ? "点击后选择图片" : "点击后选择整个文件夹"}
+          <div className="min-w-0">
+            <div className="font-medium">{isImageMode ? "选择一张 ROI 图片" : "选择文件夹或多张 ROI 图片"}</div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              {isImageMode ? "拖拽或点击上传，右侧显示评分结果。" : "拖拽后保留相对路径，适合批量评估。"}
             </div>
           </div>
         </div>
 
         {isImageMode ? (
           dashboard.singleFile ? (
-            <div className="grid gap-4 sm:grid-cols-[128px_minmax(0,1fr)]">
-              <div className="overflow-hidden rounded-2xl border bg-card">
+            <div className="grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  if (!singlePreviewUrl) {
+                    return
+                  }
+                  onPreview({
+                    src: singlePreviewUrl,
+                    alt: dashboard.singleFile?.name ?? "预览图片",
+                    caption: dashboard.singleFile?.name,
+                  })
+                }}
+                className="overflow-hidden rounded-xl border bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
                 <img
                   src={singlePreviewUrl ?? ""}
                   alt={dashboard.singleFile.name}
-                  className="h-32 w-full object-cover"
+                  width={120}
+                  height={120}
+                  className="h-30 w-full object-cover transition hover:scale-[1.02]"
                 />
-              </div>
-              <div className="flex flex-col gap-2 rounded-2xl border bg-background/80 p-4">
+              </button>
+              <div className="min-w-0 rounded-xl border bg-background p-4">
                 <div className="truncate text-sm font-medium">{dashboard.singleFile.name}</div>
-                <div className="text-sm text-muted-foreground">
-                  {compactFileSize(dashboard.singleFile.size)}
-                </div>
+                <div className="mt-2 text-sm text-muted-foreground">{compactFileSize(dashboard.singleFile.size)}</div>
               </div>
             </div>
           ) : (
-            <div className="rounded-2xl bg-background/80 p-4 text-sm text-muted-foreground">
-              拖入后即可提交评分。
+            <div className="rounded-xl bg-background px-4 py-3 text-sm text-muted-foreground">
+              上传后即可开始评分。
             </div>
           )
         ) : (
-          <div className="rounded-2xl border bg-background/80 p-4">
+          <div className="rounded-xl border bg-background p-4">
             <div className="flex items-center justify-between gap-3">
-              <div className="text-sm font-medium">已选择 {dashboard.folderItems.length} 张</div>
-              <Badge variant="outline">批量评分</Badge>
+              <div className="text-sm font-medium">{dashboard.folderItems.length} 张已选择</div>
+              <Badge variant="outline">批量</Badge>
             </div>
             {folderPreview.length ? (
-              <div className="mt-3 flex flex-col gap-1 text-sm text-muted-foreground">
+              <div className="mt-3 flex flex-col gap-2 text-sm text-muted-foreground">
                 {folderPreview.map((item) => (
                   <div key={item.relativePath} className="truncate">
                     {item.relativePath}
                   </div>
                 ))}
                 {dashboard.folderItems.length > folderPreview.length ? (
-                  <div className="text-xs">
-                    还有 {dashboard.folderItems.length - folderPreview.length} 张图片未展开
-                  </div>
+                  <div className="text-xs">还有 {dashboard.folderItems.length - folderPreview.length} 张未展开。</div>
                 ) : null}
               </div>
             ) : (
-              <div className="mt-3 text-sm text-muted-foreground">
-                保留相对路径，适合批量评估。
-              </div>
+              <div className="mt-3 text-sm text-muted-foreground">推荐直接拖入整理好的 ROI 文件夹。</div>
             )}
           </div>
         )}
@@ -160,7 +172,107 @@ function UploadDropzone({
   )
 }
 
-function ProcessingState({ dashboard }: { dashboard: DemoDashboard }) {
+function PreviewStrip({
+  results,
+  limit = 6,
+  onPreview,
+}: {
+  results: DemoDashboard["selectedResults"]
+  limit?: number
+  onPreview: (image: PreviewImage) => void
+}) {
+  const previewItems = results.slice(0, limit)
+
+  if (!previewItems.length) {
+    return null
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-3 overflow-x-auto pb-2">
+        {previewItems.map((result) => (
+          <button
+            key={result.id}
+            type="button"
+            onClick={() =>
+              onPreview({
+                src: result.public_url,
+                alt: result.relative_path,
+                caption: `${result.relative_path} · ${formatScore(result.quality_score)}`,
+              })
+            }
+            className="w-52 shrink-0 overflow-hidden rounded-xl border bg-card text-left transition hover:bg-muted/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <img
+              src={result.public_url}
+              alt={result.relative_path}
+              width={240}
+              height={160}
+              loading="lazy"
+              className="h-32 w-full object-cover transition hover:scale-[1.02]"
+            />
+            <div className="p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium tabular-nums">{formatScore(result.quality_score)}</div>
+                <Badge variant="secondary">{qualityLabel(result.quality_score)}</Badge>
+              </div>
+              <div className="mt-2 truncate text-sm text-muted-foreground">{result.relative_path}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+      {results.length > previewItems.length ? (
+        <div className="text-xs text-muted-foreground">当前仅显示前 {previewItems.length} 张预览，可横向滚动查看。</div>
+      ) : null}
+    </div>
+  )
+}
+
+function ResultPanelSummary({ dashboard }: { dashboard: DemoDashboard }) {
+  const selectedJob = dashboard.selectedJob
+
+  if (!selectedJob) {
+    return null
+  }
+
+  return (
+    <div className="mb-5 rounded-xl border bg-muted/10 p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <div className="font-medium">
+            {selectedJob.status === "running"
+              ? selectedJob.stage
+              : `${statusText(selectedJob.status)} · ${selectedJob.result_count} 条结果`}
+          </div>
+          <div className="mt-1 truncate text-sm text-muted-foreground">
+            Run {selectedJob.run_name}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={statusVariant(selectedJob.status)}>{statusText(selectedJob.status)}</Badge>
+          <Badge variant="outline">{selectedJob.kind === "image" ? "单图" : "文件夹"}</Badge>
+          <Badge variant="outline">{backendText(selectedJob.backend)}</Badge>
+          <Badge variant="outline" className="tabular-nums">
+            {selectedJob.processed_count}/{selectedJob.input_count}
+          </Badge>
+        </div>
+      </div>
+
+      {selectedJob.status === "running" ? (
+        <Progress value={clampPercentage(selectedJob.progress)} className="mt-4 h-2" />
+      ) : null}
+    </div>
+  )
+}
+
+function ProcessingState({
+  dashboard,
+  onPreview,
+}: {
+  dashboard: DemoDashboard
+  onPreview: (image: PreviewImage) => void
+}) {
   const selectedJob = dashboard.selectedJob
 
   if (!selectedJob || selectedJob.status !== "running") {
@@ -173,46 +285,15 @@ function ProcessingState({ dashboard }: { dashboard: DemoDashboard }) {
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -12 }}
-      className="flex flex-col gap-5"
+      className="flex flex-col gap-4"
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Badge variant="outline">
-            <Spinner data-icon="inline-start" />
-            处理中
-          </Badge>
-          <Badge variant="outline">{selectedJob.kind === "image" ? "单图" : "文件夹"}</Badge>
-          <Badge variant="outline">{backendText(selectedJob.backend)}</Badge>
+      {selectedJob.kind === "folder" && dashboard.selectedResults.length ? (
+        <PreviewStrip results={dashboard.selectedResults} limit={4} onPreview={onPreview} />
+      ) : (
+        <div className="rounded-xl border bg-muted/10 p-4 text-sm text-muted-foreground">
+          任务进行中，结果会在这里持续更新。
         </div>
-        <div className="text-sm text-muted-foreground">
-          {selectedJob.processed_count}/{selectedJob.input_count}
-        </div>
-      </div>
-
-      <div className="rounded-3xl border bg-muted/30 p-5">
-        <div className="flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-2xl bg-background">
-            <Spinner />
-          </div>
-          <div className="flex flex-col gap-1">
-            <div className="text-base font-medium">{selectedJob.stage}</div>
-            <div className="text-sm text-muted-foreground">
-              {selectedJob.kind === "folder"
-                ? `已完成 ${selectedJob.processed_count} / ${selectedJob.input_count}`
-                : "模型正在处理当前图片"}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-5 overflow-hidden rounded-full bg-background">
-          <motion.div
-            className="h-2 rounded-full bg-primary/70"
-            animate={{ x: ["-35%", "135%"] }}
-            transition={{ duration: 1.4, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
-            style={{ width: "38%" }}
-          />
-        </div>
-      </div>
+      )}
     </motion.div>
   )
 }
@@ -234,24 +315,27 @@ function AdvancedOptions({
     : `默认 Run ${dashboard.health?.defaultRunName ?? "未发现"}`
 
   return (
-    <div className="rounded-2xl border bg-muted/20">
+    <div className="rounded-xl border bg-muted/10">
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left"
+        className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <div className="flex items-start gap-3">
           <div className="flex size-9 items-center justify-center rounded-xl bg-background text-muted-foreground">
-            <SlidersHorizontal className="size-4" />
+            <SlidersHorizontal className="size-4" aria-hidden="true" />
           </div>
-          <div className="flex flex-col gap-1">
-            <div className="text-sm font-medium">高级选项</div>
-            <div className="text-sm text-muted-foreground">
+          <div className="min-w-0">
+            <div className="text-sm font-medium">展开运行设置</div>
+            <div className="mt-1 truncate text-sm text-muted-foreground">
               {backendText(dashboard.backend)} · {runSummary}
             </div>
           </div>
         </div>
-        <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition", open && "rotate-180")} />
+        <ChevronDown
+          aria-hidden="true"
+          className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")}
+        />
       </button>
 
       {open ? (
@@ -262,9 +346,11 @@ function AdvancedOptions({
               <FieldContent>
                 <Input
                   id="run-name"
+                  name="run-name"
+                  autoComplete="off"
                   value={dashboard.runName}
                   onChange={(event) => dashboard.setRunName(event.target.value)}
-                  placeholder={dashboard.health?.defaultRunName ?? "自动选择最新可用 run"}
+                  placeholder={dashboard.health?.defaultRunName ?? "自动选择最新可用 run…"}
                 />
                 <FieldDescription>留空时使用当前默认 checkpoint。</FieldDescription>
               </FieldContent>
@@ -310,13 +396,13 @@ function AdvancedOptions({
 
 function EmptyResult() {
   return (
-    <Empty className="border bg-muted/20">
+    <Empty className="border bg-muted/10">
       <EmptyHeader>
         <EmptyMedia variant="icon">
-          <ImagePlus />
+          <ImagePlus aria-hidden="true" />
         </EmptyMedia>
-        <EmptyTitle>暂无结果</EmptyTitle>
-        <EmptyDescription>提交任务后会在这里显示结果。</EmptyDescription>
+        <EmptyTitle>等待评分结果</EmptyTitle>
+        <EmptyDescription>上传后右侧会显示质量分数、预览与批量结果。</EmptyDescription>
       </EmptyHeader>
     </Empty>
   )
@@ -325,64 +411,50 @@ function EmptyResult() {
 function RecentJobs({ dashboard }: { dashboard: DemoDashboard }) {
   const recentJobs = dashboard.jobs.slice(0, 4)
 
+  if (!recentJobs.length) {
+    return (
+      <Empty className="border bg-muted/10">
+        <EmptyHeader>
+          <EmptyTitle>还没有任务</EmptyTitle>
+          <EmptyDescription>提交后会在这里显示。</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>最近任务</CardTitle>
-        <CardDescription>最近 4 条任务。</CardDescription>
-        <CardAction>
-          <Button asChild variant="ghost" size="sm">
-            <Link to="/jobs">
-              <ListFilter data-icon="inline-start" />
-              查看全部
-            </Link>
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        {recentJobs.length ? (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {recentJobs.map((job) => (
-              <button
-                key={job.id}
-                type="button"
-                onClick={() => void dashboard.selectJob(job.id)}
-                className={cn(
-                  "flex flex-col gap-3 rounded-2xl border p-4 text-left transition hover:bg-muted/50",
-                  dashboard.selectedJob?.id === job.id && "border-primary bg-primary/5"
-                )}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">{job.kind === "image" ? "单图" : "文件夹"}</Badge>
-                    <Badge variant={statusVariant(job.status)}>{statusText(job.status)}</Badge>
-                    <Badge variant="outline">{backendText(job.backend)}</Badge>
-                  </div>
-                  <div className="text-xs text-muted-foreground">{job.result_count} 结果</div>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <div className="truncate text-sm font-medium">{job.stage}</div>
-                  <div className="text-xs text-muted-foreground">{formatTime(job.created_at)}</div>
-                </div>
-              </button>
-            ))}
-          </div>
-        ) : (
-            <Empty className="border bg-muted/20">
-              <EmptyHeader>
-                <EmptyTitle>还没有任务</EmptyTitle>
-                <EmptyDescription>提交后会在这里显示。</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
+    <div className="grid gap-3 sm:grid-cols-2">
+      {recentJobs.map((job) => (
+        <button
+          key={job.id}
+          type="button"
+          onClick={() => void dashboard.selectJob(job.id)}
+          className={cn(
+            "flex flex-col gap-3 rounded-xl border p-4 text-left transition hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            dashboard.selectedJob?.id === job.id && "border-primary bg-primary/5"
           )}
-      </CardContent>
-    </Card>
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{job.kind === "image" ? "单图" : "文件夹"}</Badge>
+              <Badge variant={statusVariant(job.status)}>{statusText(job.status)}</Badge>
+            </div>
+            <div className="text-sm font-medium tabular-nums">{formatScore(job.average_score)}</div>
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium">{job.stage}</div>
+            <div className="mt-1 text-xs text-muted-foreground">{formatTime(job.created_at)}</div>
+          </div>
+        </button>
+      ))}
+    </div>
   )
 }
 
 export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
   const imageInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
+  const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null)
 
   useEffect(() => {
     folderInputRef.current?.setAttribute("webkitdirectory", "")
@@ -414,6 +486,20 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
     }
   }, [singlePreviewUrl])
 
+  const selectedJob = dashboard.selectedJob
+  const topResult = dashboard.topResult
+  const pythonBackend = dashboard.health?.backends.python
+  const rustBackend = dashboard.health?.backends.rust
+  const activeBackend = dashboard.backend === "python" ? pythonBackend : rustBackend
+  const selectedDistribution = useMemo(
+    () => buildScoreDistribution(dashboard.selectedResults),
+    [dashboard.selectedResults]
+  )
+  const selectedRankedScores = useMemo(
+    () => buildRankedScoreData(dashboard.selectedResults),
+    [dashboard.selectedResults]
+  )
+
   function resetUploads() {
     dashboard.resetUploads()
     if (imageInputRef.current) {
@@ -432,13 +518,6 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
     dashboard.selectFolderFiles(Array.from(event.target.files ?? []))
   }
 
-  const selectedJob = dashboard.selectedJob
-  const isImageResult = selectedJob?.kind === "image" && dashboard.topResult
-  const isFolderResult = selectedJob?.kind === "folder" && dashboard.selectedResults.length
-  const pythonBackend = dashboard.health?.backends.python
-  const rustBackend = dashboard.health?.backends.rust
-  const activeBackend = dashboard.backend === "python" ? pythonBackend : rustBackend
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -446,211 +525,177 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
       exit={{ opacity: 0, y: -16 }}
       transition={{ duration: 0.22, ease: "easeOut" }}
       className="flex flex-col gap-6"
-      >
-        {dashboard.error ? (
-          <Alert variant="destructive">
-            <AlertTitle>操作失败</AlertTitle>
-            <AlertDescription>{dashboard.error}</AlertDescription>
-          </Alert>
-        ) : null}
+    >
+      {dashboard.error ? (
+        <Alert variant="destructive">
+          <AlertTitle>操作失败</AlertTitle>
+          <AlertDescription>{dashboard.error}</AlertDescription>
+        </Alert>
+      ) : null}
 
-        <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
-          <Card className="h-fit">
+      <div className="grid items-start gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <Card className="h-fit xl:sticky xl:top-5 xl:self-start">
             <CardHeader>
               <CardTitle>上传与评分</CardTitle>
-              <CardDescription>先选择 ROI 图像，再提交评分任务。</CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col gap-6">
-              <Field>
-                <FieldLabel>评分模式</FieldLabel>
-                <FieldContent>
-                  <ToggleGroup
-                    type="single"
-                    variant="outline"
-                    value={dashboard.mode}
-                    onValueChange={(value) => {
-                      if (value === "image" || value === "folder") {
-                        dashboard.setMode(value)
-                      }
-                    }}
-                  >
-                    <ToggleGroupItem value="image" aria-label="单图评分">
-                      <ImagePlus data-icon="inline-start" />
-                      单图
-                    </ToggleGroupItem>
-                    <ToggleGroupItem value="folder" aria-label="文件夹评分">
-                      <FolderOpen data-icon="inline-start" />
-                      文件夹
-                    </ToggleGroupItem>
-                  </ToggleGroup>
-                </FieldContent>
-              </Field>
-
-              <input
-                ref={imageInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleImageInputChange}
-              />
-              <input
-                ref={folderInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={handleFolderInputChange}
-              />
-
-              <UploadDropzone
-                dashboard={dashboard}
-                singlePreviewUrl={singlePreviewUrl}
-                onChoose={() => {
-                  if (dashboard.mode === "image") {
-                    imageInputRef.current?.click()
-                  } else {
-                    folderInputRef.current?.click()
-                  }
-                }}
-              />
-
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <Button
-                  className="flex-1"
-                  size="lg"
-                  onClick={() => void dashboard.submit()}
-                  disabled={dashboard.isSubmitting}
+            <CardContent className="flex flex-col gap-5">
+            <Field>
+              <FieldLabel>评分模式</FieldLabel>
+              <FieldContent>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  value={dashboard.mode}
+                  onValueChange={(value) => {
+                    if (value === "image" || value === "folder") {
+                      dashboard.setMode(value)
+                    }
+                  }}
                 >
-                  {dashboard.isSubmitting ? (
-                    <>
-                      <Spinner data-icon="inline-start" />
-                      正在创建任务
-                    </>
-                  ) : (
-                    "立即评分"
-                  )}
-                </Button>
-                <Button variant="outline" size="lg" onClick={resetUploads} disabled={dashboard.isSubmitting}>
-                  清空
-                </Button>
-              </div>
+                  <ToggleGroupItem value="image" aria-label="单图评分">
+                    <ImagePlus aria-hidden="true" data-icon="inline-start" />
+                    单图
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="folder" aria-label="文件夹评分">
+                    <FolderOpen aria-hidden="true" data-icon="inline-start" />
+                    文件夹
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </FieldContent>
+            </Field>
 
-              <AdvancedOptions
-                dashboard={dashboard}
-                activeBackend={activeBackend}
-                pythonBackend={pythonBackend}
-                rustBackend={rustBackend}
-              />
-            </CardContent>
-          </Card>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleImageInputChange}
+            />
+            <input
+              ref={folderInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleFolderInputChange}
+            />
 
-          <div className="flex flex-col gap-6">
-            <Card>
+            <UploadDropzone
+              dashboard={dashboard}
+              singlePreviewUrl={singlePreviewUrl}
+              onPreview={setPreviewImage}
+              onChoose={() => {
+                if (dashboard.mode === "image") {
+                  imageInputRef.current?.click()
+                } else {
+                  folderInputRef.current?.click()
+                }
+              }}
+            />
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Button size="lg" onClick={() => void dashboard.submit()} disabled={dashboard.isSubmitting}>
+                {dashboard.isSubmitting ? (
+                  <>
+                    <Spinner data-icon="inline-start" />
+                    创建任务中…
+                  </>
+                ) : (
+                  "开始评分"
+                )}
+              </Button>
+              <Button variant="outline" size="lg" onClick={resetUploads} disabled={dashboard.isSubmitting}>
+                清空
+              </Button>
+            </div>
+
+            <AdvancedOptions
+              dashboard={dashboard}
+              activeBackend={activeBackend}
+              pythonBackend={pythonBackend}
+              rustBackend={rustBackend}
+            />
+          </CardContent>
+        </Card>
+
+        <div className="flex flex-col gap-5">
+          <Card>
             <CardHeader>
-              <CardTitle>当前结果</CardTitle>
-              <CardDescription>显示当前任务或最近一次结果。</CardDescription>
-              {selectedJob ? (
-                <CardAction>
-                  <div className="flex items-center gap-2">
-                    <Badge variant={statusVariant(selectedJob.status)}>{statusText(selectedJob.status)}</Badge>
-                    <Badge variant="outline">{backendText(selectedJob.backend)}</Badge>
-                  </div>
-                </CardAction>
-              ) : null}
+              <CardTitle>结果面板</CardTitle>
             </CardHeader>
             <CardContent>
+              <ResultPanelSummary dashboard={dashboard} />
               <AnimatePresence mode="wait">
                 {selectedJob?.status === "running" ? (
-                  <ProcessingState key={selectedJob.id} dashboard={dashboard} />
-                ) : isImageResult ? (
+                  <ProcessingState key={selectedJob.id} dashboard={dashboard} onPreview={setPreviewImage} />
+                ) : selectedJob?.kind === "image" && topResult ? (
                   <motion.div
-                    key={`image-${dashboard.topResult?.id}`}
+                    key={`image-${topResult.id}`}
                     initial={{ opacity: 0, y: 12 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -12 }}
-                    className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]"
+                    className="grid gap-6 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]"
                   >
-                    <img
-                      src={dashboard.topResult?.public_url}
-                      alt={dashboard.topResult?.relative_path}
-                      className="h-88 w-full rounded-3xl border object-cover"
-                    />
-                    <div className="flex flex-col gap-5">
-                      <div className="flex items-center gap-3">
-                        <div className="text-5xl font-semibold">
-                          {dashboard.topResult?.quality_score.toFixed(4)}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPreviewImage({
+                          src: topResult.public_url,
+                          alt: topResult.relative_path,
+                          caption: `${topResult.relative_path} · ${formatScore(topResult.quality_score)}`,
+                        })
+                      }
+                      className="overflow-hidden rounded-xl border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <img
+                        src={topResult.public_url}
+                        alt={topResult.relative_path}
+                        width={360}
+                        height={360}
+                        className="h-80 w-full object-cover transition hover:scale-[1.01]"
+                      />
+                    </button>
+                    <div className="flex flex-col gap-4">
+                      <div>
+                        <div className="text-sm text-muted-foreground">质量分数</div>
+                        <div className="mt-2 flex items-center gap-3">
+                          <div className="text-4xl font-semibold tabular-nums">{formatScore(topResult.quality_score)}</div>
+                          <Badge variant="secondary">{qualityLabel(topResult.quality_score)}</Badge>
                         </div>
-                        <Badge variant="secondary">{qualityLabel(dashboard.topResult?.quality_score ?? 0)}</Badge>
                       </div>
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center justify-between text-sm text-muted-foreground">
-                          <span>质量分位</span>
-                          <span>{clampPercentage((dashboard.topResult?.quality_score ?? 0) * 100).toFixed(1)}%</span>
-                        </div>
-                        <Progress value={clampPercentage((dashboard.topResult?.quality_score ?? 0) * 100)} />
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="rounded-2xl border bg-muted/30 p-4">
-                          <div className="text-sm text-muted-foreground">文件名</div>
-                          <div className="mt-2 truncate font-medium">
-                            {dashboard.topResult?.relative_path}
-                          </div>
-                        </div>
-                        <div className="rounded-2xl border bg-muted/30 p-4">
-                          <div className="text-sm text-muted-foreground">完成时间</div>
-                          <div className="mt-2 font-medium">{formatTime(selectedJob.completed_at)}</div>
-                        </div>
+
+                      <Progress value={clampPercentage(topResult.quality_score * 100)} className="h-2" />
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <DemoStatCard label="完成时间" value={formatTime(selectedJob.completed_at)} />
+                        <DemoStatCard label="文件名" value={topResult.relative_path} />
                       </div>
                     </div>
                   </motion.div>
-                ) : isFolderResult ? (
+                ) : selectedJob?.kind === "folder" && dashboard.selectedResults.length ? (
                   <motion.div
-                    key={`folder-${selectedJob?.id}`}
+                    key={`folder-${selectedJob.id}`}
                     initial={{ opacity: 0, y: 12 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -12 }}
                     className="flex flex-col gap-5"
                   >
                     <div className="grid gap-3 md:grid-cols-3">
-                      <div className="rounded-2xl border bg-muted/30 p-4">
-                        <div className="text-sm text-muted-foreground">平均分</div>
-                        <div className="mt-2 text-2xl font-semibold">
-                          {dashboard.summaryScore?.toFixed(4)}
-                        </div>
-                      </div>
-                      <div className="rounded-2xl border bg-muted/30 p-4">
-                        <div className="text-sm text-muted-foreground">结果数量</div>
-                        <div className="mt-2 text-2xl font-semibold">{dashboard.selectedResults.length}</div>
-                      </div>
-                      <div className="rounded-2xl border bg-muted/30 p-4">
-                        <div className="text-sm text-muted-foreground">完成时间</div>
-                        <div className="mt-2 text-lg font-medium">{formatTime(selectedJob?.completed_at ?? null)}</div>
-                      </div>
+                      <DemoStatCard label="平均分" value={formatScore(selectedJob.average_score)} hint="整批图像平均质量" />
+                      <DemoStatCard label="最高分" value={formatScore(selectedJob.best_score)} hint="当前最佳样本" />
+                      <DemoStatCard
+                        label="结果数量"
+                        value={String(dashboard.selectedResults.length)}
+                        hint={selectedJob.completed_at ? formatTime(selectedJob.completed_at) : "等待完成"}
+                      />
                     </div>
-                    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                      {dashboard.selectedResults.slice(0, 6).map((result) => (
-                        <div key={result.id} className="overflow-hidden rounded-3xl border bg-card">
-                          <img
-                            src={result.public_url}
-                            alt={result.relative_path}
-                            className="h-40 w-full object-cover"
-                          />
-                          <div className="flex flex-col gap-2 p-4">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="font-medium">{result.quality_score.toFixed(4)}</div>
-                              <Badge variant="secondary">{qualityLabel(result.quality_score)}</Badge>
-                            </div>
-                            <div className="truncate text-sm text-muted-foreground">
-                              {result.relative_path}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+
+                    <PreviewStrip results={dashboard.selectedResults} onPreview={setPreviewImage} />
+
                     <div>
                       <Button asChild variant="outline">
                         <Link to="/jobs">
-                          <ListFilter data-icon="inline-start" />
-                          去任务管理查看完整结果
+                          <ListFilter aria-hidden="true" data-icon="inline-start" />
+                          查看完整结果
                         </Link>
                       </Button>
                     </div>
@@ -662,9 +707,37 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
             </CardContent>
           </Card>
 
-          <RecentJobs dashboard={dashboard} />
+          {selectedJob?.kind === "folder" && dashboard.selectedResults.length ? (
+            <DemoDisclosure
+              title="展开质量分析"
+              description="仅展示当前任务的分布与排序分析。"
+            >
+              <div className="flex flex-col gap-4">
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <ScoreDistributionChart
+                    data={selectedDistribution}
+                    title="质量分布"
+                    description="按优秀 / 良好 / 一般 / 偏低统计当前任务。"
+                  />
+                  <RankedScoreChart
+                    data={selectedRankedScores}
+                    title="排序曲线"
+                    description="按得分从高到低查看质量衰减趋势。"
+                  />
+                </div>
+              </div>
+            </DemoDisclosure>
+          ) : null}
+
+          <DemoDisclosure
+            title="展开最近任务"
+          >
+            <RecentJobs dashboard={dashboard} />
+          </DemoDisclosure>
         </div>
       </div>
+
+      <DemoImagePreview image={previewImage} onOpenChange={(open) => !open && setPreviewImage(null)} />
     </motion.div>
   )
 }

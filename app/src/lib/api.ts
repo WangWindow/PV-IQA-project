@@ -34,6 +34,33 @@ export async function deleteJob(jobId: string): Promise<void> {
   )
 }
 
+export async function stopJob(jobId: string): Promise<JobRecord> {
+  const payload = await unwrapJson<{ job: JobRecord }>(
+    await fetch(`/api/jobs/${jobId}/stop`, {
+      method: "POST",
+    })
+  )
+  return payload.job
+}
+
+export async function resumeJob(jobId: string): Promise<JobRecord> {
+  const payload = await unwrapJson<{ job: JobRecord }>(
+    await fetch(`/api/jobs/${jobId}/resume`, {
+      method: "POST",
+    })
+  )
+  return payload.job
+}
+
+export async function rerunJob(jobId: string): Promise<JobRecord> {
+  const payload = await unwrapJson<{ job: JobRecord }>(
+    await fetch(`/api/jobs/${jobId}/rerun`, {
+      method: "POST",
+    })
+  )
+  return payload.job
+}
+
 export async function submitSingleImage(
   file: File,
   backend: InferenceBackend,

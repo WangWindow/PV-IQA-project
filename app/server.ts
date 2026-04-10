@@ -3,7 +3,7 @@ import { chmod, copyFile, mkdir, readdir, rm } from "node:fs/promises"
 import { basename, dirname, normalize, resolve } from "node:path"
 
 type JobKind = "image" | "folder"
-type JobStatus = "running" | "completed" | "failed"
+type JobStatus = "running" | "interrupted" | "completed" | "failed"
 type InferenceBackend = "python" | "rust"
 type UploadedFile = Blob & { name: string }
 type MultipartEntry = string | UploadedFile
@@ -23,6 +23,9 @@ type JobSummary = {
   updated_at: string
   completed_at: string | null
   error: string | null
+  average_score: number | null
+  best_score: number | null
+  worst_score: number | null
 }
 
 type ResultRecord = {
@@ -51,6 +54,18 @@ type JobState = {
   stage: string
   completedAt: string | null
   error: string | null
+}
+
+type ActiveJobContext = {
+  jobId: string
+  kind: JobKind
+  backend: InferenceBackend
+  runName: string
+  abortController: AbortController
+  currentPythonProcess: ReturnType<typeof Bun.spawn> | null
+  stopRequested: boolean
+  stopReason: string | null
+  done: Promise<void> | null
 }
 
 type ImageDetectionPayload = {
@@ -132,6 +147,8 @@ const RUST_BINARY_PROFILE = RUST_USE_RELEASE ? "release" : "debug"
 const RUST_DEVICE_PREFERENCE = (process.env.PV_IQA_RS_DEVICE ?? "auto").trim().toLowerCase()
 const RUST_PREPROCESS_MODE = (process.env.PV_IQA_RS_PREPROCESS_MODE ?? "python-pillow").trim()
 const RUST_RESIZE_MODE = (process.env.PV_IQA_RS_RESIZE_MODE ?? "fast-convolution-bilinear").trim()
+const RUST_BATCH_CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.PV_IQA_RS_BATCH_CONCURRENCY ?? 2) || 2))
+const RUST_BATCH_CHUNK_SIZE = Math.max(1, Math.min(32, Number(process.env.PV_IQA_RS_BATCH_CHUNK_SIZE ?? 16) || 16))
 const RUST_HEALTH_TIMEOUT_MS = Number(process.env.PV_IQA_RS_HEALTH_TIMEOUT_MS ?? 1500)
 const RUST_REQUEST_TIMEOUT_MS = Number(process.env.PV_IQA_RS_REQUEST_TIMEOUT_MS ?? 300000)
 const RUST_START_TIMEOUT_MS = Number(process.env.PV_IQA_RS_START_TIMEOUT_MS ?? 300000)
@@ -165,6 +182,14 @@ let pythonHealthCache:
       }
     }
   | null = null
+const activeJobs = new Map<string, ActiveJobContext>()
+
+class JobStoppedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "JobStoppedError"
+  }
+}
 
 await mkdir(DATA_ROOT, { recursive: true })
 await mkdir(UPLOAD_ROOT, { recursive: true })
@@ -227,6 +252,8 @@ const insertResultQuery = db.query(
 )
 const deleteResultsQuery = db.query("DELETE FROM results WHERE job_id = ?")
 const deleteJobQuery = db.query("DELETE FROM jobs WHERE id = ?")
+const countResultsQuery = db.query("SELECT COUNT(*) AS count FROM results WHERE job_id = ?")
+const listResultPathsQuery = db.query("SELECT relative_path FROM results WHERE job_id = ? ORDER BY relative_path ASC")
 
 function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   return Response.json(payload, init)
@@ -252,6 +279,178 @@ function sanitizeRelativePath(rawPath: string): string {
 
 function publicUploadUrl(jobId: string, relativePath: string): string {
   return `/uploads/${jobId}/${sanitizeRelativePath(relativePath)}`
+}
+
+function createActiveJobContext(
+  jobId: string,
+  kind: JobKind,
+  backend: InferenceBackend,
+  runName: string
+): ActiveJobContext {
+  return {
+    jobId,
+    kind,
+    backend,
+    runName,
+    abortController: new AbortController(),
+    currentPythonProcess: null,
+    stopRequested: false,
+    stopReason: null,
+    done: null,
+  }
+}
+
+function assertJobActive(jobContext?: ActiveJobContext): void {
+  if (!jobContext) {
+    return
+  }
+  if (jobContext.stopRequested || jobContext.abortController.signal.aborted) {
+    throw new JobStoppedError(jobContext.stopReason || "任务已停止，可继续处理。")
+  }
+}
+
+function requestJobStop(jobId: string, reason: string): ActiveJobContext | null {
+  const jobContext = activeJobs.get(jobId)
+  if (!jobContext) {
+    return null
+  }
+
+  jobContext.stopRequested = true
+  jobContext.stopReason = reason
+  if (!jobContext.abortController.signal.aborted) {
+    jobContext.abortController.abort(reason)
+  }
+  try {
+    jobContext.currentPythonProcess?.kill()
+  } catch {
+    // Ignore transient kill failures; the stopped flag still prevents new work.
+  }
+  return jobContext
+}
+
+function startManagedJob(
+  jobId: string,
+  kind: JobKind,
+  backend: InferenceBackend,
+  runName: string,
+  execute: (jobContext: ActiveJobContext) => Promise<void>
+): void {
+  if (activeJobs.has(jobId)) {
+    throw new Error(`Job ${jobId} is already running.`)
+  }
+  const jobContext = createActiveJobContext(jobId, kind, backend, runName)
+  activeJobs.set(jobId, jobContext)
+  const done = execute(jobContext).finally(() => {
+    if (activeJobs.get(jobId) === jobContext) {
+      activeJobs.delete(jobId)
+    }
+  })
+  jobContext.done = done
+  void done
+}
+
+function resultCountForJob(jobId: string): number {
+  const row = countResultsQuery.get(jobId) as { count: number } | null
+  return Number(row?.count ?? 0)
+}
+
+function loadResultPaths(jobId: string): Set<string> {
+  const rows = listResultPathsQuery.all(jobId) as Array<{ relative_path: string }>
+  return new Set(rows.map((row) => row.relative_path))
+}
+
+async function collectSavedUploads(jobId: string, currentPath: string, prefix = ""): Promise<SavedUpload[]> {
+  const entries = await readdir(currentPath, { withFileTypes: true }).catch(() => [])
+  const uploads: SavedUpload[] = []
+
+  for (const entry of entries) {
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
+    const savedPath = resolve(currentPath, entry.name)
+    if (entry.isDirectory()) {
+      uploads.push(...(await collectSavedUploads(jobId, savedPath, relativePath)))
+      continue
+    }
+    if (!entry.isFile()) {
+      continue
+    }
+    const cleanedPath = sanitizeRelativePath(relativePath)
+    uploads.push({
+      savedPath,
+      relativePath: cleanedPath,
+      publicUrl: publicUploadUrl(jobId, cleanedPath),
+    })
+  }
+
+  return uploads
+}
+
+async function loadSavedUploads(jobId: string): Promise<SavedUpload[]> {
+  const uploads = await collectSavedUploads(jobId, resolve(UPLOAD_ROOT, jobId))
+  return uploads.sort((left, right) => left.relativePath.localeCompare(right.relativePath, "en"))
+}
+
+function interruptedStage(kind: JobKind, processedCount: number, total: number, reason: string): string {
+  if (kind === "folder") {
+    return `${reason} · ${processedCount}/${total}`
+  }
+  return reason
+}
+
+function finalizeInterruptedJob(jobId: string, kind: JobKind, total: number, reason: string): void {
+  const processedCount = Math.min(total, resultCountForJob(jobId))
+  const completed = total > 0 && processedCount >= total
+  persistJobState(jobId, {
+    status: completed ? "completed" : "interrupted",
+    processedCount,
+    progress: total ? (processedCount / total) * 100 : 0,
+    stage: completed
+      ? kind === "image"
+        ? "评分完成"
+        : "批量评分完成"
+      : interruptedStage(kind, processedCount, total, reason),
+    completedAt: completed ? nowIso() : null,
+    error: completed ? null : reason,
+  })
+}
+
+function finalizeFailedJob(jobId: string, kind: JobKind, total: number, reason: string): void {
+  const processedCount = Math.min(total, resultCountForJob(jobId))
+  persistJobState(jobId, {
+    status: "failed",
+    processedCount,
+    progress: total ? (processedCount / total) * 100 : 0,
+    stage: kind === "image" ? "评分失败" : "批量评分失败",
+    completedAt: nowIso(),
+    error: reason,
+  })
+}
+
+function reconcileRunningJobsOnStartup(): void {
+  const jobs = db
+    .query(
+      `SELECT id, kind, backend, run_name, input_count, processed_count, progress, stage, created_at, updated_at, completed_at, error
+       FROM jobs
+       WHERE status = 'running'
+       ORDER BY created_at ASC`
+    )
+    .all() as Array<Omit<JobSummary, "status" | "result_count" | "average_score" | "best_score" | "worst_score">>
+
+  for (const job of jobs) {
+    const processedCount = Math.min(job.input_count, resultCountForJob(job.id))
+    const completed = job.input_count > 0 && processedCount >= job.input_count
+    persistJobState(job.id, {
+      status: completed ? "completed" : "interrupted",
+      processedCount,
+      progress: completed ? 100 : job.input_count ? (processedCount / job.input_count) * 100 : 0,
+      stage: completed
+        ? job.kind === "image"
+          ? "评分完成（服务恢复）"
+          : "批量评分完成（服务恢复）"
+        : interruptedStage(job.kind, processedCount, job.input_count, "服务重启后中断，可继续处理"),
+      completedAt: completed ? job.completed_at ?? nowIso() : null,
+      error: completed ? null : "任务在服务停止时未正常结束。",
+    })
+  }
 }
 
 function isUploadedFile(entry: MultipartEntry): entry is UploadedFile {
@@ -302,7 +501,11 @@ async function resolveDefaultRunName(): Promise<string> {
   return latest.name
 }
 
-async function runPvIqaCommand(args: string[]): Promise<{ stdout: string; stderr: string }> {
+async function runPvIqaCommand(
+  args: string[],
+  jobContext?: ActiveJobContext
+): Promise<{ stdout: string; stderr: string }> {
+  assertJobActive(jobContext)
   const command = Bun.spawn(["uv", "run", "pv-iqa", ...args], {
     cwd: REPO_ROOT,
     stdout: "pipe",
@@ -312,22 +515,35 @@ async function runPvIqaCommand(args: string[]): Promise<{ stdout: string; stderr
       PYTHONIOENCODING: "utf-8",
     },
   })
+  if (jobContext) {
+    jobContext.currentPythonProcess = command
+  }
 
   const stdoutPromise = new Response(command.stdout).text()
   const stderrPromise = new Response(command.stderr).text()
-  const exitCode = await command.exited
-  const stdout = (await stdoutPromise).trim()
-  const stderr = (await stderrPromise).trim()
+  try {
+    const exitCode = await command.exited
+    const stdout = (await stdoutPromise).trim()
+    const stderr = (await stderrPromise).trim()
 
-  if (exitCode !== 0) {
-    throw new Error(stderr || stdout || "pv-iqa command failed")
+    if (jobContext?.stopRequested) {
+      throw new JobStoppedError(jobContext.stopReason || "任务已停止，可继续处理。")
+    }
+
+    if (exitCode !== 0) {
+      throw new Error(stderr || stdout || "pv-iqa command failed")
+    }
+
+    return { stdout, stderr }
+  } finally {
+    if (jobContext?.currentPythonProcess === command) {
+      jobContext.currentPythonProcess = null
+    }
   }
-
-  return { stdout, stderr }
 }
 
-async function runPvIqaJson(args: string[]): Promise<unknown> {
-  const { stdout } = await runPvIqaCommand(args)
+async function runPvIqaJson(args: string[], jobContext?: ActiveJobContext): Promise<unknown> {
+  const { stdout } = await runPvIqaCommand(args, jobContext)
 
   try {
     return JSON.parse(stdout)
@@ -473,9 +689,11 @@ async function fetchJson<T>(
   init: RequestInit = {},
   timeoutMs = RUST_HEALTH_TIMEOUT_MS
 ): Promise<{ response: Response; payload: T & { error?: string } }> {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal
   const response = await fetch(url, {
     ...init,
-    signal: AbortSignal.timeout(timeoutMs),
+    signal,
   })
   const payload = (await response.json()) as T & { error?: string }
   return { response, payload }
@@ -675,13 +893,14 @@ async function ensureRustBackendReady(runName: string): Promise<RustHealthPayloa
   return health.payload
 }
 
-async function callRustBackend<T>(path: string, payload: unknown): Promise<T> {
+async function callRustBackend<T>(path: string, payload: unknown, signal?: AbortSignal): Promise<T> {
   const { response, payload: body } = await fetchJson<T>(`${RUST_SERVICE_URL}${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
     },
     body: JSON.stringify(payload),
+    signal,
   }, RUST_REQUEST_TIMEOUT_MS)
 
   if (!response.ok) {
@@ -734,6 +953,8 @@ function persistJobState(jobId: string, state: JobState): void {
   )
 }
 
+reconcileRunningJobsOnStartup()
+
 function loadJobSummary(jobId: string): JobSummary | null {
   return db
     .query(
@@ -751,7 +972,10 @@ function loadJobSummary(jobId: string): JobSummary | null {
          jobs.updated_at,
          jobs.completed_at,
          jobs.error,
-         (SELECT COUNT(*) FROM results WHERE job_id = jobs.id) AS result_count
+         (SELECT COUNT(*) FROM results WHERE job_id = jobs.id) AS result_count,
+         (SELECT AVG(quality_score) FROM results WHERE job_id = jobs.id) AS average_score,
+         (SELECT MAX(quality_score) FROM results WHERE job_id = jobs.id) AS best_score,
+         (SELECT MIN(quality_score) FROM results WHERE job_id = jobs.id) AS worst_score
        FROM jobs
        WHERE jobs.id = ?`
     )
@@ -790,7 +1014,10 @@ function listJobs(limit = 20): JobSummary[] {
          jobs.updated_at,
          jobs.completed_at,
          jobs.error,
-         (SELECT COUNT(*) FROM results WHERE job_id = jobs.id) AS result_count
+         (SELECT COUNT(*) FROM results WHERE job_id = jobs.id) AS result_count,
+         (SELECT AVG(quality_score) FROM results WHERE job_id = jobs.id) AS average_score,
+         (SELECT MAX(quality_score) FROM results WHERE job_id = jobs.id) AS best_score,
+         (SELECT MIN(quality_score) FROM results WHERE job_id = jobs.id) AS worst_score
        FROM jobs
        ORDER BY jobs.created_at DESC
        LIMIT ?`
@@ -800,7 +1027,8 @@ function listJobs(limit = 20): JobSummary[] {
 
 async function detectImageWithPython(
   savedPath: string,
-  runName: string
+  runName: string,
+  jobContext?: ActiveJobContext
 ): Promise<ImageDetectionPayload["result"]> {
   const output = (await runPvIqaJson([
     "detect-image",
@@ -808,55 +1036,141 @@ async function detectImageWithPython(
     "--run-name",
     runName,
     "--json-output",
-  ])) as ImageDetectionPayload
+  ], jobContext)) as ImageDetectionPayload
   return output.result
 }
 
 async function detectImageWithRust(
   savedPath: string,
-  runName: string
+  runName: string,
+  jobContext?: ActiveJobContext
 ): Promise<RustImageDetectionPayload["result"]> {
+  assertJobActive(jobContext)
   await ensureRustBackendReady(runName)
+  return detectImageWithRustReady(savedPath, runName, jobContext?.abortController.signal)
+}
+
+async function detectImageWithRustReady(
+  savedPath: string,
+  runName: string,
+  signal?: AbortSignal
+): Promise<RustImageDetectionPayload["result"]> {
   const output = await callRustBackend<RustImageDetectionPayload>("/score/image", {
     run_name: runName,
     image_path: savedPath,
-  })
+  }, signal)
   return output.result
 }
 
 async function detectBatchWithRust(
   uploads: SavedUpload[],
-  runName: string
+  runName: string,
+  onProgress?: (update: {
+    upload: SavedUpload
+    result: RustImageDetectionPayload["result"]
+    completedCount: number
+    total: number
+  }) => void,
+  signal?: AbortSignal
 ): Promise<RustBatchDetectionPayload["results"]> {
   await ensureRustBackendReady(runName)
-  const output = await callRustBackend<RustBatchDetectionPayload>("/score/batch", {
-    run_name: runName,
-    image_paths: uploads.map((upload) => upload.savedPath),
+  if (!uploads.length) {
+    return []
+  }
+
+  const uploadChunks = Array.from({ length: Math.ceil(uploads.length / RUST_BATCH_CHUNK_SIZE) }, (_, chunkIndex) =>
+    uploads
+      .slice(chunkIndex * RUST_BATCH_CHUNK_SIZE, (chunkIndex + 1) * RUST_BATCH_CHUNK_SIZE)
+      .map((upload, indexInChunk) => ({
+        upload,
+        index: chunkIndex * RUST_BATCH_CHUNK_SIZE + indexInChunk,
+      }))
+  )
+  const results = new Array<RustImageDetectionPayload["result"] | undefined>(uploads.length)
+  const workerCount = Math.min(RUST_BATCH_CONCURRENCY, uploadChunks.length)
+  let nextChunkIndex = 0
+  let completedCount = 0
+
+  async function detectBatchChunkWithRustReady(
+    chunk: SavedUpload[],
+    currentRunName: string
+  ): Promise<RustBatchDetectionPayload["results"]> {
+    const output = await callRustBackend<RustBatchDetectionPayload>("/score/batch", {
+      run_name: currentRunName,
+      image_paths: chunk.map((upload) => upload.savedPath),
+    }, signal)
+    return output.results
+  }
+
+  async function worker(): Promise<void> {
+    while (nextChunkIndex < uploadChunks.length) {
+      const currentChunkIndex = nextChunkIndex
+      nextChunkIndex += 1
+      const chunkEntries = uploadChunks[currentChunkIndex]
+      const chunkUploads = chunkEntries.map((entry) => entry.upload)
+      const chunkResults = await detectBatchChunkWithRustReady(chunkUploads, runName)
+      if (chunkResults.length !== chunkEntries.length) {
+        throw new Error(
+          `Rust backend returned ${chunkResults.length} results for chunk size ${chunkEntries.length}.`
+        )
+      }
+
+      const entryByPath = new Map(chunkEntries.map((entry) => [entry.upload.savedPath, entry] as const))
+      for (const [resultIndex, result] of chunkResults.entries()) {
+        const entry = entryByPath.get(result.image_path) ?? chunkEntries[resultIndex]
+        if (!entry) {
+          throw new Error(`Rust backend returned an unknown image path: ${result.image_path}`)
+        }
+        results[entry.index] = result
+        completedCount += 1
+        onProgress?.({
+          upload: entry.upload,
+          result,
+          completedCount,
+          total: uploads.length,
+        })
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  return results.map((result, index) => {
+    if (!result) {
+      throw new Error(`Rust backend returned no result for upload ${uploads[index]?.savedPath ?? index}.`)
+    }
+    return result
   })
-  return output.results
 }
 
 async function detectImage(
   savedPath: string,
   runName: string,
-  backend: InferenceBackend
+  backend: InferenceBackend,
+  jobContext?: ActiveJobContext
 ): Promise<ImageDetectionPayload["result"]> {
   if (backend === "rust") {
-    return detectImageWithRust(savedPath, runName)
+    return detectImageWithRust(savedPath, runName, jobContext)
   }
-  return detectImageWithPython(savedPath, runName)
+  return detectImageWithPython(savedPath, runName, jobContext)
+}
+
+type FolderProcessOptions = {
+  startingProcessedCount?: number
+  skipRelativePaths?: Set<string>
+  resumeLabel?: string
 }
 
 async function processImageJob(
   jobId: string,
   runName: string,
   upload: SavedUpload,
-  backend: InferenceBackend
+  backend: InferenceBackend,
+  jobContext: ActiveJobContext
 ): Promise<void> {
   const state: JobState = {
     status: "running",
     processedCount: 0,
-    progress: 25,
+    progress: 0,
     stage: backend === "rust" ? "Rust 后端评分中" : "模型评分中",
     completedAt: null,
     error: null,
@@ -864,7 +1178,7 @@ async function processImageJob(
   persistJobState(jobId, state)
 
   try {
-    const result = await detectImage(upload.savedPath, runName, backend)
+    const result = await detectImage(upload.savedPath, runName, backend, jobContext)
     insertResultQuery.run(
       jobId,
       result.image_path,
@@ -880,12 +1194,11 @@ async function processImageJob(
     state.completedAt = nowIso()
     persistJobState(jobId, state)
   } catch (error) {
-    state.status = "failed"
-    state.progress = Math.max(state.progress, 25)
-    state.stage = "评分失败"
-    state.error = String(error)
-    state.completedAt = nowIso()
-    persistJobState(jobId, state)
+    if (jobContext.stopRequested || error instanceof JobStoppedError) {
+      finalizeInterruptedJob(jobId, "image", 1, jobContext.stopReason || "任务已停止，可继续处理")
+      return
+    }
+    finalizeFailedJob(jobId, "image", 1, String(error))
   }
 }
 
@@ -893,37 +1206,50 @@ async function processFolderJob(
   jobId: string,
   runName: string,
   uploads: SavedUpload[],
-  backend: InferenceBackend
+  backend: InferenceBackend,
+  jobContext: ActiveJobContext,
+  options: FolderProcessOptions = {}
 ): Promise<void> {
   const total = uploads.length
+  const completedPaths = options.skipRelativePaths ?? new Set<string>()
+  const pendingUploads = uploads.filter((upload) => !completedPaths.has(upload.relativePath))
+  const startingProcessedCount = Math.min(options.startingProcessedCount ?? completedPaths.size, total)
   const state: JobState = {
     status: "running",
-    processedCount: 0,
-    progress: total ? 10 : 100,
-    stage: total ? "等待批量评分" : "没有可评分图片",
+    processedCount: startingProcessedCount,
+    progress: total ? (startingProcessedCount / total) * 100 : 100,
+    stage: total
+      ? options.resumeLabel ?? (startingProcessedCount ? `继续批量评分 · ${startingProcessedCount}/${total}` : "等待批量评分")
+      : "没有可评分图片",
     completedAt: null,
     error: null,
   }
   persistJobState(jobId, state)
 
   try {
+    assertJobActive(jobContext)
+    if (!pendingUploads.length) {
+      state.status = "completed"
+      state.processedCount = total
+      state.progress = 100
+      state.stage = "批量评分完成"
+      state.completedAt = nowIso()
+      persistJobState(jobId, state)
+      return
+    }
+
     if (backend === "rust") {
-      state.stage = total ? "Rust 批量评分中" : "没有可评分图片"
-      state.progress = total ? 20 : 100
+      const workerCount = Math.min(Math.ceil(pendingUploads.length / RUST_BATCH_CHUNK_SIZE), RUST_BATCH_CONCURRENCY)
+      state.stage = pendingUploads.length
+        ? `Rust 分块批量评分中 · ${startingProcessedCount}/${total}（${RUST_BATCH_CHUNK_SIZE}/批，${workerCount} 路）`
+        : "没有可评分图片"
+      state.progress = total ? (startingProcessedCount / total) * 100 : 100
       persistJobState(jobId, state)
 
-      const results = await detectBatchWithRust(uploads, runName)
-      if (results.length !== uploads.length) {
-        throw new Error(`Rust backend returned ${results.length} results for ${uploads.length} uploads.`)
-      }
-
-      const uploadByPath = new Map(uploads.map((upload) => [upload.savedPath, upload] as const))
-      for (const [index, result] of results.entries()) {
-        const upload = uploadByPath.get(result.image_path)
-        if (!upload) {
-          throw new Error(`Rust backend returned an unknown image path: ${result.image_path}`)
-        }
-
+      const results = await detectBatchWithRust(
+        pendingUploads,
+        runName,
+        ({ upload, result, completedCount }) => {
         insertResultQuery.run(
           jobId,
           result.image_path,
@@ -932,13 +1258,22 @@ async function processFolderJob(
           result.quality_score
         )
 
-        state.processedCount = index + 1
-        state.progress = 20 + ((index + 1) / total) * 75
-        state.stage = `已完成 ${state.processedCount}/${total}`
+          state.processedCount = startingProcessedCount + completedCount
+          state.progress = total ? (state.processedCount / total) * 100 : 100
+        state.stage =
+            state.processedCount < total
+              ? `Rust 分块批量评分中 · ${state.processedCount}/${total}（${RUST_BATCH_CHUNK_SIZE}/批，${workerCount} 路）`
+              : `已完成 ${state.processedCount}/${total}`
         persistJobState(jobId, state)
+        },
+        jobContext.abortController.signal
+      )
+      if (results.length !== pendingUploads.length) {
+        throw new Error(`Rust backend returned ${results.length} results for ${pendingUploads.length} uploads.`)
       }
 
       state.status = "completed"
+      state.processedCount = total
       state.progress = 100
       state.stage = "批量评分完成"
       state.completedAt = nowIso()
@@ -946,12 +1281,13 @@ async function processFolderJob(
       return
     }
 
-    for (const [index, upload] of uploads.entries()) {
-      state.stage = `批量评分中 ${index + 1}/${total}`
-      state.progress = 15 + (index / total) * 75
+    for (const [index, upload] of pendingUploads.entries()) {
+      assertJobActive(jobContext)
+      state.stage = `批量评分中 ${startingProcessedCount + index + 1}/${total}`
+      state.progress = total ? ((startingProcessedCount + index) / total) * 100 : 100
       persistJobState(jobId, state)
 
-      const result = await detectImage(upload.savedPath, runName, backend)
+      const result = await detectImage(upload.savedPath, runName, backend, jobContext)
       insertResultQuery.run(
         jobId,
         result.image_path,
@@ -960,24 +1296,24 @@ async function processFolderJob(
         result.quality_score
       )
 
-      state.processedCount = index + 1
-      state.progress = 15 + ((index + 1) / total) * 75
+      state.processedCount = startingProcessedCount + index + 1
+      state.progress = total ? (state.processedCount / total) * 100 : 100
       state.stage = `已完成 ${state.processedCount}/${total}`
       persistJobState(jobId, state)
     }
 
     state.status = "completed"
+    state.processedCount = total
     state.progress = 100
     state.stage = "批量评分完成"
     state.completedAt = nowIso()
     persistJobState(jobId, state)
   } catch (error) {
-    state.status = "failed"
-    state.progress = Math.max(state.progress, 15)
-    state.stage = "批量评分失败"
-    state.error = String(error)
-    state.completedAt = nowIso()
-    persistJobState(jobId, state)
+    if (jobContext.stopRequested || error instanceof JobStoppedError) {
+      finalizeInterruptedJob(jobId, "folder", total, jobContext.stopReason || "任务已停止，可继续处理")
+      return
+    }
+    finalizeFailedJob(jobId, "folder", total, String(error))
   }
 }
 
@@ -997,6 +1333,104 @@ function parseBackend(formData: FormDataLike): InferenceBackend {
   throw new Error("Invalid inference backend.")
 }
 
+async function requireSavedJobUploads(jobId: string): Promise<SavedUpload[]> {
+  const uploads = await loadSavedUploads(jobId)
+  if (!uploads.length) {
+    throw new Error("未找到该任务对应的原始上传文件。")
+  }
+  return uploads
+}
+
+function startExistingJob(job: JobSummary, uploads: SavedUpload[], options?: FolderProcessOptions): void {
+  if (job.kind === "image") {
+    const upload = uploads[0]
+    if (!upload) {
+      throw new Error("未找到用于重新评分的图片文件。")
+    }
+    startManagedJob(job.id, job.kind, job.backend, job.run_name, (jobContext) =>
+      processImageJob(job.id, job.run_name, upload, job.backend, jobContext)
+    )
+    return
+  }
+
+  startManagedJob(job.id, job.kind, job.backend, job.run_name, (jobContext) =>
+    processFolderJob(job.id, job.run_name, uploads, job.backend, jobContext, options)
+  )
+}
+
+async function handleStopJob(jobId: string): Promise<Response> {
+  const job = loadJobSummary(jobId)
+  if (!job) {
+    return errorResponse("Job not found.", 404)
+  }
+  if (job.status !== "running") {
+    return errorResponse("Only running jobs can be stopped.", 409)
+  }
+
+  const runtime = requestJobStop(jobId, "任务已停止，可继续处理")
+  if (runtime) {
+    await runtime.done?.catch(() => undefined)
+  } else {
+    finalizeInterruptedJob(jobId, job.kind, job.input_count, "任务已停止，可继续处理")
+  }
+
+  return jsonResponse({ job: loadJob(jobId) })
+}
+
+async function handleResumeJob(jobId: string): Promise<Response> {
+  const job = loadJobSummary(jobId)
+  if (!job) {
+    return errorResponse("Job not found.", 404)
+  }
+  if (job.status !== "interrupted") {
+    return errorResponse("Only interrupted jobs can be resumed.", 409)
+  }
+  if (activeJobs.has(jobId)) {
+    return errorResponse("This job is already running.", 409)
+  }
+
+  try {
+    const uploads = await requireSavedJobUploads(jobId)
+    if (job.kind === "image") {
+      if (resultCountForJob(jobId) >= 1) {
+        finalizeInterruptedJob(jobId, "image", 1, "评分已完成")
+        return jsonResponse({ job: loadJob(jobId) })
+      }
+      startExistingJob(job, uploads)
+      return jsonResponse({ job: loadJob(jobId) }, { status: 202 })
+    }
+
+    const completedPaths = loadResultPaths(jobId)
+    startExistingJob(job, uploads, {
+      startingProcessedCount: completedPaths.size,
+      skipRelativePaths: completedPaths,
+      resumeLabel: `继续批量评分 · ${completedPaths.size}/${uploads.length}`,
+    })
+    return jsonResponse({ job: loadJob(jobId) }, { status: 202 })
+  } catch (error) {
+    return errorResponse(String(error), 409)
+  }
+}
+
+async function handleRerunJob(jobId: string): Promise<Response> {
+  const job = loadJobSummary(jobId)
+  if (!job) {
+    return errorResponse("Job not found.", 404)
+  }
+  if (job.status === "running" || activeJobs.has(jobId)) {
+    return errorResponse("Running jobs must be stopped before rerun.", 409)
+  }
+
+  try {
+    const uploads = await requireSavedJobUploads(jobId)
+    deleteResultsQuery.run(jobId)
+    startExistingJob(job, uploads)
+    return jsonResponse({ job: loadJob(jobId) }, { status: 202 })
+  } catch (error) {
+    return errorResponse(String(error), 409)
+  }
+}
+
 async function handleImageScore(request: Request): Promise<Response> {
   const formData = await request.formData()
   const file = formData.get("file") as MultipartEntry | null
@@ -1013,13 +1447,15 @@ async function handleImageScore(request: Request): Promise<Response> {
     createJob(jobId, "image", backend, runName, 1, {
       status: "running",
       processedCount: 0,
-      progress: 10,
+      progress: 0,
       stage: "上传完成，等待评分",
       completedAt: null,
       error: null,
     })
 
-    void processImageJob(jobId, runName, upload, backend)
+    startManagedJob(jobId, "image", backend, runName, (jobContext) =>
+      processImageJob(jobId, runName, upload, backend, jobContext)
+    )
     return jsonResponse({ job: loadJob(jobId) }, { status: 202 })
   } catch (error) {
     return errorResponse(String(error), 500)
@@ -1051,13 +1487,15 @@ async function handleFolderScore(request: Request): Promise<Response> {
     createJob(jobId, "folder", backend, runName, uploads.length, {
       status: "running",
       processedCount: 0,
-      progress: 8,
+      progress: 0,
       stage: "上传完成，等待批量评分",
       completedAt: null,
       error: null,
     })
 
-    void processFolderJob(jobId, runName, uploads, backend)
+    startManagedJob(jobId, "folder", backend, runName, (jobContext) =>
+      processFolderJob(jobId, runName, uploads, backend, jobContext)
+    )
     return jsonResponse({ job: loadJob(jobId) }, { status: 202 })
   } catch (error) {
     return errorResponse(String(error), 500)
@@ -1069,8 +1507,11 @@ async function handleDeleteJob(jobId: string): Promise<Response> {
   if (!job) {
     return errorResponse("Job not found.", 404)
   }
-  if (job.status === "running") {
-    return errorResponse("Running jobs cannot be deleted.", 409)
+
+  const runtime = activeJobs.get(jobId)
+  if (job.status === "running" || runtime) {
+    requestJobStop(jobId, "任务已强制停止，准备删除")
+    await runtime?.done?.catch(() => undefined)
   }
 
   deleteResultsQuery.run(jobId)
@@ -1181,18 +1622,30 @@ const server = Bun.serve({
     }
 
     if (url.pathname.startsWith("/api/jobs/")) {
-      const jobId = url.pathname.split("/").pop()
+      const [, , jobId, action] = url.pathname.split("/").filter(Boolean)
       if (!jobId) {
         return errorResponse("Job not found.", 404)
       }
 
-      if (request.method === "GET") {
+      if (!action && request.method === "GET") {
         const job = loadJob(jobId)
         return job ? jsonResponse({ job }) : errorResponse("Job not found.", 404)
       }
 
-      if (request.method === "DELETE") {
+      if (!action && request.method === "DELETE") {
         return handleDeleteJob(jobId)
+      }
+
+      if (request.method === "POST") {
+        if (action === "stop") {
+          return handleStopJob(jobId)
+        }
+        if (action === "resume") {
+          return handleResumeJob(jobId)
+        }
+        if (action === "rerun") {
+          return handleRerunJob(jobId)
+        }
       }
     }
 

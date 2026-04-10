@@ -21,6 +21,9 @@ export function statusText(status: JobStatus): string {
   if (status === "completed") {
     return "已完成"
   }
+  if (status === "interrupted") {
+    return "已中断"
+  }
   if (status === "failed") {
     return "失败"
   }
@@ -105,6 +108,13 @@ export function averageScore(results: ScoreResult[]): number | null {
     return null
   }
   return results.reduce((sum, item) => sum + item.quality_score, 0) / results.length
+}
+
+export function formatScore(value: number | null | undefined, digits = 4): string {
+  if (value == null || Number.isNaN(value)) {
+    return "—"
+  }
+  return value.toFixed(digits)
 }
 
 export function clampPercentage(value: number): number {

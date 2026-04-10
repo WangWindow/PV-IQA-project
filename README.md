@@ -281,9 +281,13 @@ Rust 服务默认监听 `127.0.0.1:7007`。
 | `PV_IQA_RS_RELEASE` | `1` | 缺少二进制时，是否默认按 `release` 构建 |
 | `PV_IQA_RS_CARGO_FEATURES` | `cuda` | 构建 CUDA 版二进制时使用的 Cargo features |
 | `PV_IQA_RS_PREPROCESS_MODE` | `python-pillow` | Bun 自动拉起 Rust 时使用的预处理模式 |
+| `PV_IQA_RS_BATCH_CHUNK_SIZE` | `16` | Rust 文件夹评分时每个批次提交给 `/score/batch` 的图片数 |
+| `PV_IQA_RS_BATCH_CONCURRENCY` | `2` | Rust 文件夹评分的分块并发路数；用于流水线化预处理与推理 |
 | `PV_IQA_RS_HEALTH_TIMEOUT_MS` | `1500` | 健康检查超时 |
 | `PV_IQA_RS_REQUEST_TIMEOUT_MS` | `300000` | Rust 推理请求超时 |
 | `PV_IQA_RS_START_TIMEOUT_MS` | `300000` | 自动拉起服务后的等待时长 |
+
+Rust 文件夹评分默认采用“**分块 batch + 低并发流水线**”策略：既保留 `/score/batch` 的吞吐优势，又能让前端持续看到处理中进度，而不是从 `0/N` 直接跳到 `N/N`。
 
 ### 9.4 已发布二进制与选择规则
 
@@ -358,4 +362,3 @@ bun run stop:api
 - 暂不包含 ROI 提取阶段
 - Rust 端默认通过 Python/Pillow helper 对齐预处理；模型前向仍由 Rust/Candle 执行
 - 评估阶段通过逐步排斥低质量样本，观察剩余集合上的 EER / TAR 变化形成 ERC 曲线
-

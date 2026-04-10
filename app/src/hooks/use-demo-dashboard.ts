@@ -5,6 +5,9 @@ import {
   fetchHealth,
   fetchJob,
   fetchJobs,
+  rerunJob as rerunJobRequest,
+  resumeJob as resumeJobRequest,
+  stopJob as stopJobRequest,
   submitFolder,
   submitSingleImage,
 } from "@/lib/api"
@@ -33,6 +36,7 @@ export type DemoDashboardState = {
   isSubmitting: boolean
   isDragging: boolean
   deletingJobId: string | null
+  mutatingJobId: string | null
   error: string | null
   selectedResults: JobRecord["results"]
   topResult: JobRecord["results"][number] | null
@@ -54,6 +58,9 @@ export type DemoDashboardActions = {
   handleDrop: (dataTransfer: DataTransfer) => Promise<void>
   submit: () => Promise<void>
   selectJob: (jobId: string) => Promise<void>
+  stopJob: (jobId: string) => Promise<void>
+  resumeJob: (jobId: string) => Promise<void>
+  rerunJob: (jobId: string) => Promise<void>
   removeJob: (jobId: string) => Promise<void>
 }
 
@@ -116,6 +123,7 @@ export function useDemoDashboard(): DemoDashboard {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [deletingJobId, setDeletingJobId] = useState<string | null>(null)
+  const [mutatingJobId, setMutatingJobId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const refreshHealth = useCallback(async () => {
@@ -353,6 +361,57 @@ export function useDemoDashboard(): DemoDashboard {
     [refreshJobs, selectedJob?.id]
   )
 
+  const stopJob = useCallback(
+    async (jobId: string) => {
+      try {
+        setError(null)
+        setMutatingJobId(jobId)
+        const nextJob = await stopJobRequest(jobId)
+        setSelectedJob(nextJob)
+        await refreshJobs()
+      } catch (caughtError) {
+        setError(String(caughtError))
+      } finally {
+        setMutatingJobId(null)
+      }
+    },
+    [refreshJobs]
+  )
+
+  const resumeJob = useCallback(
+    async (jobId: string) => {
+      try {
+        setError(null)
+        setMutatingJobId(jobId)
+        const nextJob = await resumeJobRequest(jobId)
+        setSelectedJob(nextJob)
+        await refreshJobs()
+      } catch (caughtError) {
+        setError(String(caughtError))
+      } finally {
+        setMutatingJobId(null)
+      }
+    },
+    [refreshJobs]
+  )
+
+  const rerunJob = useCallback(
+    async (jobId: string) => {
+      try {
+        setError(null)
+        setMutatingJobId(jobId)
+        const nextJob = await rerunJobRequest(jobId)
+        setSelectedJob(nextJob)
+        await refreshJobs()
+      } catch (caughtError) {
+        setError(String(caughtError))
+      } finally {
+        setMutatingJobId(null)
+      }
+    },
+    [refreshJobs]
+  )
+
   return {
     mode,
     health,
@@ -366,6 +425,7 @@ export function useDemoDashboard(): DemoDashboard {
     isSubmitting,
     isDragging,
     deletingJobId,
+    mutatingJobId,
     error,
     selectedResults,
     topResult,
@@ -384,6 +444,9 @@ export function useDemoDashboard(): DemoDashboard {
     handleDrop,
     submit,
     selectJob,
+    stopJob,
+    resumeJob,
+    rerunJob,
     removeJob,
   }
 }

@@ -1,8 +1,10 @@
 import { useState, type ReactNode } from "react"
 import { Link, NavLink } from "react-router-dom"
-import { FolderClock, LayoutDashboard, Menu } from "lucide-react"
+import { FolderClock, LayoutDashboard, LaptopMinimal, Menu, MoonStar, SunMedium } from "lucide-react"
 
 import type { DemoDashboard } from "@/hooks/use-demo-dashboard"
+import { useThemeMode } from "@/hooks/use-theme-mode"
+import type { ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -28,6 +30,55 @@ const NAV_ITEMS = [
   },
 ] as const
 
+const THEME_ITEMS: Array<{
+  value: ThemeMode
+  label: string
+  icon: typeof SunMedium
+}> = [
+  { value: "light", label: "浅色", icon: SunMedium },
+  { value: "dark", label: "深色", icon: MoonStar },
+  { value: "system", label: "系统", icon: LaptopMinimal },
+]
+
+function nextThemeMode(currentMode: ThemeMode): ThemeMode {
+  if (currentMode === "light") {
+    return "dark"
+  }
+  if (currentMode === "dark") {
+    return "system"
+  }
+  return "light"
+}
+
+function themeMeta(mode: ThemeMode) {
+  return THEME_ITEMS.find((item) => item.value === mode) ?? THEME_ITEMS[0]
+}
+
+function ThemeModeButton({
+  value,
+  onValueChange,
+}: {
+  value: ThemeMode
+  onValueChange: (value: ThemeMode) => void
+}) {
+  const current = themeMeta(value)
+  const next = themeMeta(nextThemeMode(value))
+  const Icon = current.icon
+
+  return (
+    <Button
+      variant="outline"
+      size="icon-sm"
+      className="bg-background/70 backdrop-blur-sm"
+      title={`当前${current.label}模式，点击切换到${next.label}`}
+      onClick={() => onValueChange(next.value)}
+    >
+      <Icon />
+      <span className="sr-only">{`当前${current.label}模式，点击切换到${next.label}`}</span>
+    </Button>
+  )
+}
+
 export function AppShell({
   dashboard,
   children,
@@ -36,15 +87,25 @@ export function AppShell({
   children: ReactNode
 }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const theme = useThemeMode()
 
   return (
-    <div className="min-h-screen bg-muted/30">
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-5 lg:px-6">
-        <header className="flex items-center justify-between rounded-3xl border bg-card/90 px-4 py-3 shadow-sm">
-          <div className="flex items-center gap-3">
-            <Link to="/workspace" className="flex flex-col">
-              <span className="text-sm text-muted-foreground">PV-IQA</span>
-              <span className="text-lg font-semibold tracking-tight">掌静脉质量评分</span>
+    <div className="min-h-screen bg-background">
+      <a
+        href="#main-content"
+        className="sr-only absolute left-4 top-4 z-50 rounded-md bg-background px-3 py-2 text-sm shadow focus:not-sr-only"
+      >
+        跳到主要内容
+      </a>
+
+      <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-4 px-4 py-5 lg:px-6">
+        <header className="flex items-center justify-between rounded-xl border border-border/70 bg-card/80 px-4 py-3 shadow-sm backdrop-blur-xl supports-[backdrop-filter]:bg-card/72">
+          <div className="min-w-0">
+            <Link to="/workspace" className="flex min-w-0 flex-col">
+              <span className="text-xs tracking-[0.18em] text-muted-foreground uppercase" translate="no">
+                PV-IQA
+              </span>
+              <span className="truncate text-base font-semibold tracking-tight">掌静脉质量评分</span>
             </Link>
           </div>
 
@@ -65,15 +126,17 @@ export function AppShell({
                 </NavLink>
               )
             })}
+            <ThemeModeButton value={theme.mode} onValueChange={theme.setMode} />
           </div>
 
           <div className="flex items-center gap-2 md:hidden">
             {dashboard.activeRunningCount ? (
               <Badge variant="outline">{dashboard.activeRunningCount} 处理中</Badge>
             ) : null}
+            <ThemeModeButton value={theme.mode} onValueChange={theme.setMode} />
             <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
               <SheetTrigger asChild>
-                <Button variant="ghost" size="icon-sm">
+                <Button variant="ghost" size="icon-sm" aria-label="打开导航菜单">
                   <Menu />
                   <span className="sr-only">打开导航菜单</span>
                 </Button>
@@ -112,7 +175,9 @@ export function AppShell({
           </div>
         </header>
 
-        <main className={cn("flex-1")}>{children}</main>
+        <main id="main-content" className={cn("flex-1")}>
+          {children}
+        </main>
       </div>
     </div>
   )
