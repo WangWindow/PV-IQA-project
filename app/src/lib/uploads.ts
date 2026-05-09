@@ -1,7 +1,5 @@
 import type { UploadItem } from "@/lib/types"
 
-type UploadMode = "image" | "folder"
-
 type DataTransferItemWithEntry = DataTransferItem & {
   webkitGetAsEntry?: () => FileSystemEntry | null
 }
@@ -23,21 +21,18 @@ function relativePathFromFile(file: File): string {
   return file.name
 }
 
-function finalizeItems(items: UploadItem[], mode: UploadMode): UploadItem[] {
-  const nextItems = items
+function finalizeItems(items: UploadItem[]): UploadItem[] {
+  return items
     .filter((item) => isImageFile(item.file))
     .sort((left, right) => left.relativePath.localeCompare(right.relativePath, "zh-CN"))
-
-  return mode === "image" ? nextItems.slice(0, 1) : nextItems
 }
 
-export function filesToUploadItems(files: Iterable<File>, mode: UploadMode): UploadItem[] {
+export function filesToUploadItems(files: Iterable<File>): UploadItem[] {
   return finalizeItems(
     Array.from(files).map((file) => ({
       file,
       relativePath: relativePathFromFile(file),
-    })),
-    mode
+    }))
   )
 }
 
@@ -94,8 +89,7 @@ async function walkEntry(
 }
 
 export async function readDroppedItems(
-  dataTransfer: DataTransfer,
-  mode: UploadMode
+  dataTransfer: DataTransfer
 ): Promise<UploadItem[]> {
   const entries = Array.from(dataTransfer.items ?? [])
     .map((item) => (item as DataTransferItemWithEntry).webkitGetAsEntry?.() ?? null)
@@ -103,8 +97,8 @@ export async function readDroppedItems(
 
   if (entries.length) {
     const nested = await Promise.all(entries.map((entry) => walkEntry(entry)))
-    return finalizeItems(nested.flat(), mode)
+    return finalizeItems(nested.flat())
   }
 
-  return filesToUploadItems(Array.from(dataTransfer.files), mode)
+  return filesToUploadItems(Array.from(dataTransfer.files))
 }

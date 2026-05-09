@@ -21,10 +21,7 @@ import type {
 import { averageScore } from "@/lib/format"
 import { filesToUploadItems, readDroppedItems } from "@/lib/uploads"
 
-export type UploadMode = "image" | "folder"
-
 export type DashboardState = {
-  mode: UploadMode
   health: HealthResponse | null
   jobs: JobSummary[]
   selectedJob: JobRecord | null
@@ -48,7 +45,6 @@ export type DashboardState = {
 }
 
 export type DashboardActions = {
-  setMode: (mode: UploadMode) => void
   setBackend: (backend: InferenceBackend) => void
   setDevice: (device: "cpu" | "cuda") => void
   setRunName: (value: string) => void
@@ -115,7 +111,6 @@ function writeDashboardPreferences(preferences: {
 
 export function useDashboard(): Dashboard {
   const [storedPreferences] = useState<DashboardPreferences>(() => readDashboardPreferences())
-  const [mode, setMode] = useState<UploadMode>("image")
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [jobs, setJobs] = useState<JobSummary[]>([])
   const [selectedJob, setSelectedJob] = useState<JobRecord | null>(null)
@@ -295,19 +290,21 @@ export function useDashboard(): Dashboard {
   }, [])
 
   const selectFolderFiles = useCallback((files: Iterable<File>) => {
-    setFolderItems(filesToUploadItems(files, "folder"))
+    setFolderItems(filesToUploadItems(files))
   }, [])
 
   const handleDrop = useCallback(
     async (dataTransfer: DataTransfer) => {
-      const droppedItems = await readDroppedItems(dataTransfer, mode)
-      if (mode === "image") {
-        setSingleFile(droppedItems[0]?.file ?? null)
-        return
+      const droppedItems = await readDroppedItems(dataTransfer)
+      if (droppedItems.length === 1) {
+        setSingleFile(droppedItems[0].file)
+        setFolderItems([])
+      } else if (droppedItems.length > 1) {
+        setSingleFile(null)
+        setFolderItems(droppedItems)
       }
-      setFolderItems(droppedItems)
     },
-    [mode]
+    []
   )
 
   const submit = useCallback(async () => {
@@ -317,16 +314,12 @@ export function useDashboard(): Dashboard {
       const effectiveRunName = runName.trim() || health?.defaultRunName
       let nextJob: JobRecord
 
-        if (mode === "image") {
-          if (!singleFile) {
-            throw new Error("请先选择一张图片。")
-          }
+        if (singleFile) {
           nextJob = await submitSingleImage(singleFile, backend, device, effectiveRunName)
-        } else {
-          if (!folderItems.length) {
-            throw new Error("请先选择一个文件夹。")
-          }
+        } else if (folderItems.length > 0) {
           nextJob = await submitFolder(folderItems, backend, device, effectiveRunName)
+        } else {
+          throw new Error("请先选择图片。")
         }
 
       setSelectedJob(nextJob)
@@ -337,7 +330,7 @@ export function useDashboard(): Dashboard {
     } finally {
       setIsSubmitting(false)
     }
-  }, [backend, device, folderItems, health?.defaultRunName, mode, refreshJobs, resetUploads, runName, singleFile])
+  }, [backend, device, folderItems, health?.defaultRunName, refreshJobs, resetUploads, runName, singleFile])
 
   const selectJob = useCallback(async (jobId: string) => {
     try {
@@ -424,7 +417,6 @@ export function useDashboard(): Dashboard {
   )
 
   return {
-    mode,
     health,
     jobs,
     selectedJob,
@@ -445,7 +437,6 @@ export function useDashboard(): Dashboard {
     activeRunningCount,
     completedCount,
     failedCount,
-    setMode,
     setBackend,
     setDevice,
     setRunName,

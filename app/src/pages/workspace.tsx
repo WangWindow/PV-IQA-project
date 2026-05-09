@@ -62,7 +62,8 @@ function UploadDropzone({
   onChoose: () => void
   onPreview: (image: PreviewImage) => void
 }) {
-  const isImageMode = dashboard.mode === "image"
+  const hasFiles = dashboard.singleFile !== null || dashboard.folderItems.length > 0
+  const fileCount = dashboard.singleFile ? 1 : dashboard.folderItems.length
   const folderPreview = dashboard.folderItems.slice(0, 3)
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -101,53 +102,51 @@ function UploadDropzone({
             <UploadCloud aria-hidden="true" className="size-4" />
           </div>
           <div className="min-w-0">
-            <div className="font-medium">{isImageMode ? "选择一张 ROI 图片" : "选择文件夹或多张 ROI 图片"}</div>
+            <div className="font-medium">拖拽或点击上传图片</div>
             <div className="mt-1 text-sm text-muted-foreground">
-              {isImageMode ? "拖拽或点击上传，右侧显示评分结果。" : "拖拽后保留相对路径，适合批量评估。"}
+              单击选文件 · 拖拽自动识别 · 下方按钮选文件夹
             </div>
           </div>
         </div>
 
-        {isImageMode ? (
-          dashboard.singleFile ? (
-            <div className="grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)]">
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  if (!singlePreviewUrl) {
-                    return
-                  }
-                  onPreview({
-                    src: singlePreviewUrl,
-                    alt: dashboard.singleFile?.name ?? "预览图片",
-                    caption: dashboard.singleFile?.name,
-                  })
-                }}
-                className="overflow-hidden rounded-xl border bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <img
-                  src={singlePreviewUrl ?? ""}
-                  alt={dashboard.singleFile.name}
-                  width={120}
-                  height={120}
-                  className="h-30 w-full object-cover transition hover:scale-[1.02]"
-                />
-              </button>
-              <div className="min-w-0 rounded-xl border bg-background p-4">
-                <div className="truncate text-sm font-medium">{dashboard.singleFile.name}</div>
-                <div className="mt-2 text-sm text-muted-foreground">{compactFileSize(dashboard.singleFile.size)}</div>
-              </div>
+        {!hasFiles ? (
+          <div className="rounded-xl bg-background px-4 py-3 text-sm text-muted-foreground">
+            上传后即可开始评分。
+          </div>
+        ) : dashboard.singleFile ? (
+          <div className="grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                if (!singlePreviewUrl) {
+                  return
+                }
+                onPreview({
+                  src: singlePreviewUrl,
+                  alt: dashboard.singleFile?.name ?? "预览图片",
+                  caption: dashboard.singleFile?.name,
+                })
+              }}
+              className="overflow-hidden rounded-xl border bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <img
+                src={singlePreviewUrl ?? ""}
+                alt={dashboard.singleFile?.name ?? ""}
+                width={120}
+                height={120}
+                className="h-30 w-full object-cover transition hover:scale-[1.02]"
+              />
+            </button>
+            <div className="min-w-0 rounded-xl border bg-background p-4">
+              <div className="truncate text-sm font-medium">{dashboard.singleFile.name}</div>
+              <div className="mt-2 text-sm text-muted-foreground">{compactFileSize(dashboard.singleFile.size)}</div>
             </div>
-          ) : (
-            <div className="rounded-xl bg-background px-4 py-3 text-sm text-muted-foreground">
-              上传后即可开始评分。
-            </div>
-          )
+          </div>
         ) : (
           <div className="rounded-xl border bg-background p-4">
             <div className="flex items-center justify-between gap-3">
-              <div className="text-sm font-medium">{dashboard.folderItems.length} 张已选择</div>
+              <div className="text-sm font-medium">{fileCount} 张已选择</div>
               <Badge variant="outline">批量</Badge>
             </div>
             {folderPreview.length ? (
@@ -305,9 +304,6 @@ function AdvancedOptions({
   rustBackend?: BackendHealth | null
 }) {
   const [open, setOpen] = useState(false)
-  const runSummary = dashboard.runName.trim()
-    ? `Run ${dashboard.runName.trim()}`
-    : `默认 Run ${dashboard.health?.defaultRunName ?? "未发现"}`
 
   return (
     <div className="rounded-xl border bg-muted/10">
@@ -456,7 +452,7 @@ function RecentJobs({ dashboard }: { dashboard: Dashboard }) {
 }
 
 export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
-  const imageInputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null)
 
@@ -466,16 +462,10 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
   }, [])
 
   useEffect(() => {
-    if (!dashboard.singleFile && imageInputRef.current) {
-      imageInputRef.current.value = ""
+    if (!dashboard.singleFile && !dashboard.folderItems.length && fileInputRef.current) {
+      fileInputRef.current.value = ""
     }
-  }, [dashboard.singleFile])
-
-  useEffect(() => {
-    if (!dashboard.folderItems.length && folderInputRef.current) {
-      folderInputRef.current.value = ""
-    }
-  }, [dashboard.folderItems.length])
+  }, [dashboard.singleFile, dashboard.folderItems.length])
 
   const singlePreviewUrl = useMemo(
     () => (dashboard.singleFile ? URL.createObjectURL(dashboard.singleFile) : null),
@@ -504,20 +494,21 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
 
   function resetUploads() {
     dashboard.resetUploads()
-    if (imageInputRef.current) {
-      imageInputRef.current.value = ""
-    }
-    if (folderInputRef.current) {
-      folderInputRef.current.value = ""
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""
     }
   }
 
-  function handleImageInputChange(event: ChangeEvent<HTMLInputElement>) {
-    dashboard.selectImageFile(event.target.files?.item(0) ?? null)
-  }
-
-  function handleFolderInputChange(event: ChangeEvent<HTMLInputElement>) {
-    dashboard.selectFolderFiles(Array.from(event.target.files ?? []))
+  function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? [])
+    if (files.length === 0) return
+    if (files.length === 1) {
+      dashboard.selectImageFile(files[0])
+      dashboard.selectFolderFiles([])
+    } else {
+      dashboard.selectImageFile(null)
+      dashboard.selectFolderFiles(files)
+    }
   }
 
   return (
@@ -541,74 +532,42 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
             <CardTitle>上传与评分</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-5">
-            <Field>
-              <FieldLabel>评分模式</FieldLabel>
-              <FieldContent>
-                <ToggleGroup
-                  type="single"
-                  variant="outline"
-                  value={dashboard.mode}
-                  onValueChange={(value) => {
-                    if (value === "image" || value === "folder") {
-                      dashboard.setMode(value)
-                    }
-                  }}
-                >
-                  <ToggleGroupItem value="image" aria-label="单图评分">
-                    <ImagePlus aria-hidden="true" data-icon="inline-start" />
-                    单图
-                  </ToggleGroupItem>
-                  <ToggleGroupItem value="folder" aria-label="文件夹评分">
-                    <FolderOpen aria-hidden="true" data-icon="inline-start" />
-                    文件夹
-                  </ToggleGroupItem>
-                </ToggleGroup>
-              </FieldContent>
-            </Field>
-
             <input
-              ref={imageInputRef}
+              ref={fileInputRef}
               type="file"
               accept="image/*"
+              multiple
               className="hidden"
-              onChange={handleImageInputChange}
+              onChange={handleFileInputChange}
             />
             <input
               ref={folderInputRef}
               type="file"
               multiple
               className="hidden"
-              onChange={handleFolderInputChange}
+              onChange={handleFileInputChange}
             />
 
             <UploadDropzone
               dashboard={dashboard}
               singlePreviewUrl={singlePreviewUrl}
               onPreview={setPreviewImage}
-              onChoose={() => {
-                if (dashboard.mode === "image") {
-                  imageInputRef.current?.click()
-                } else {
-                  folderInputRef.current?.click()
-                }
-              }}
+              onChoose={() => fileInputRef.current?.click()}
             />
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-2 gap-3">
               <Button size="lg" onClick={() => void dashboard.submit()} disabled={dashboard.isSubmitting}>
-                {dashboard.isSubmitting ? (
-                  <>
-                    <Spinner data-icon="inline-start" />
-                    创建任务中…
-                  </>
-                ) : (
-                  "开始评分"
-                )}
+                {dashboard.isSubmitting ? <><Spinner data-icon="inline-start" />创建任务中…</> : "开始评分"}
               </Button>
-              <Button variant="outline" size="lg" onClick={resetUploads} disabled={dashboard.isSubmitting}>
-                清空
+              <Button variant="outline" size="lg" onClick={() => folderInputRef.current?.click()} disabled={dashboard.isSubmitting}>
+                <FolderOpen aria-hidden="true" data-icon="inline-start" />
+                文件夹
               </Button>
             </div>
+
+            <Button variant="ghost" size="sm" onClick={resetUploads} disabled={dashboard.isSubmitting}>
+              清空
+            </Button>
 
             <AdvancedOptions
               dashboard={dashboard}

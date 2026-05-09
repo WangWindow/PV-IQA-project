@@ -121,32 +121,68 @@ def binary_available(path: Path) -> dict[str, object]:
     return {"available": available, "state": "ready" if available else "error"}
 
 
-def rust_score(run: str, paths: list[str], device: str) -> list[dict[str, object]]:
+def rust_score(run: str, paths: list[str], device: str, job_id: str = "", total: int = 0) -> list[dict[str, object]]:
     onnx_path = REPO / "checkpoints" / run / "iqa" / "best.onnx"
     if not onnx_path.exists():
         raise RuntimeError(f"Rust model not found: {onnx_path}")
 
     binary = BIN_CUDA if device == "cuda" else BIN_CPU
-    result = subprocess.run(
-        [str(binary), "score", "--model", str(onnx_path), "--image", paths[0], "--device", device],
-        capture_output=True, text=True, timeout=120,
+
+    if len(paths) == 1:
+        result = subprocess.run(
+            [str(binary), "score", "--model", str(onnx_path), "--image", paths[0], "--device", device],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+        return [json.loads(result.stdout)]
+
+    # Batch: stream progress from stderr, capture result from stdout
+    batch_dir = str(Path(paths[0]).parent)
+    proc = subprocess.Popen(
+        [str(binary), "batch", "--model", str(onnx_path), "--dir", batch_dir, "--device", device],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-    data = json.loads(result.stdout)
-    return [data]
+
+    # Read stderr line by line for progress
+    import select
+    stderr_lines = []
+    while proc.poll() is None:
+        if proc.stderr:
+            line = proc.stderr.readline()
+            if line:
+                stderr_lines.append(line)
+                if line.startswith("PROGRESS:") and job_id:
+                    try:
+                        parts = line.strip().split(":")[1]
+                        done, total_str = parts.split("/")
+                        pct = round(int(done) / int(total_str) * 100, 1)
+                        db_execute(
+                            "UPDATE jobs SET processed_count=?, progress=?, stage=?, updated_at=? WHERE id=?",
+                            (int(done), pct, f"scoring {done}/{total_str}", now_iso(), job_id),
+                        )
+                    except Exception:
+                        pass
+
+    stdout, stderr = proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError((stderr or stdout).strip())
+    return json.loads(stdout)
 
 
 def py_score(run: str, paths: list[str]) -> list[dict[str, object]]:
     sys.path.insert(0, str(REPO / "src"))
     from pv_iqa.config import Config
-    from pv_iqa.inference import score_image
+    from pv_iqa.inference import score_folder
 
     config = Config()
     config.name = run
     config.metadata_path = str(REPO / "checkpoints" / run / "data" / "metadata.csv")
     checkpoint = str(REPO / "checkpoints" / run / "iqa" / "best.pt")
-    return [score_image(config, checkpoint, path) for path in paths]
+    if len(paths) == 1:
+        from pv_iqa.inference import score_image
+        return [score_image(config, checkpoint, paths[0])]
+    return score_folder(config, checkpoint, Path(paths[0]).parent)
 
 
 def do_score(run: str, paths: list[str], backend: str, device: str) -> list[dict[str, object]]:
@@ -198,80 +234,54 @@ def process_job(
 
     try:
         results: list[dict[str, object]] = []
-        for index, (abs_path, relative_path, public_url) in enumerate(paths):
-            if backend == "rust":
-                try:
-                    row = rust_score(run_name, [abs_path], device)[0]
-                except Exception:
-                    row = score_image(config, checkpoint, abs_path)
-            else:
-                row = score_image(config, checkpoint, abs_path)
 
-            row["relative_path"] = relative_path
-            row["public_url"] = public_url
-            results.append(row)
-
-            progress = round((index + 1) / total * 100, 1)
+        if backend == "rust":
+            all_paths = [p[0] for p in paths]
             db_execute(
-                """
-                UPDATE jobs
-                   SET processed_count = ?,
-                       progress = ?,
-                       stage = ?,
-                       updated_at = ?
-                 WHERE id = ?
-                """,
-                (index + 1, progress, f"scoring {index + 1}/{total}", now_iso(), job_id),
+                "UPDATE jobs SET stage=?, updated_at=? WHERE id=?",
+                (f"scoring 0/{total}", now_iso(), job_id),
             )
+            try:
+                results = rust_score(run_name, all_paths, device, job_id, total)
+            except Exception:
+                for abs_path, relative_path, public_url in paths:
+                    row = score_image(config, checkpoint, abs_path)
+                    row["relative_path"] = relative_path
+                    row["public_url"] = public_url
+                    results.append(row)
+                    db_execute(
+                        "UPDATE jobs SET processed_count=?, progress=?, stage=?, updated_at=? WHERE id=?",
+                        (len(results), round(len(results) / total * 100, 1), f"scoring {len(results)}/{total}", now_iso(), job_id),
+                    )
+        else:
+            for abs_path, relative_path, public_url in paths:
+                row = score_image(config, checkpoint, abs_path)
+                row["relative_path"] = relative_path
+                row["public_url"] = public_url
+                results.append(row)
+                db_execute(
+                    "UPDATE jobs SET processed_count=?, progress=?, stage=?, updated_at=? WHERE id=?",
+                    (len(results), round(len(results) / total * 100, 1), f"scoring {len(results)}/{total}", now_iso(), job_id),
+                )
 
-        scores = [float(row["quality_score"]) for row in results]
+        # Batch insert results
+        with db_lock:
+            for row in results:
+                con.execute(
+                    "INSERT INTO results (job_id, image_path, relative_path, public_url, quality_score) VALUES (?, ?, ?, ?, ?)",
+                    (job_id, str(row["image_path"]), str(row.get("relative_path", "")), str(row.get("public_url", "")), float(row["quality_score"])),
+                )
+
+        scores = [float(r["quality_score"]) for r in results]
         average_score = sum(scores) / len(scores)
         best_score = max(scores)
         worst_score = min(scores)
 
-        with db_lock:
-            for row in results:
-                con.execute(
-                    """
-                    INSERT INTO results (
-                        job_id, image_path, relative_path, public_url, quality_score
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        job_id,
-                        str(row["image_path"]),
-                        str(row.get("relative_path", "")),
-                        str(row.get("public_url", "")),
-                        float(row["quality_score"]),
-                    ),
-                )
-            con.execute(
-                """
-                UPDATE jobs
-                   SET status = 'completed',
-                       result_count = ?,
-                       processed_count = ?,
-                       progress = 100,
-                       average_score = ?,
-                       best_score = ?,
-                       worst_score = ?,
-                       completed_at = ?,
-                       updated_at = ?,
-                       stage = 'done'
-                 WHERE id = ?
-                """,
-                (
-                    len(results),
-                    len(results),
-                    average_score,
-                    best_score,
-                    worst_score,
-                    now_iso(),
-                    now_iso(),
-                    job_id,
-                ),
-            )
-            con.commit()
+        db_execute(
+            "UPDATE jobs SET status='completed', result_count=?, processed_count=?, progress=100, average_score=?, best_score=?, worst_score=?, completed_at=?, updated_at=?, stage='done' WHERE id=?",
+            (len(results), len(results), average_score, best_score, worst_score, now_iso(), now_iso(), job_id),
+        )
+
     except Exception as exc:
         db_execute(
             """
