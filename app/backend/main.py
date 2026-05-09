@@ -113,7 +113,7 @@ def default_run_name() -> str:
             if (run_dir / "iqa" / "best.onnx").exists()
         )
     )
-    return candidates[0] if candidates else ""
+    return candidates[-1] if candidates else ""
 
 
 def binary_available(path: Path) -> dict[str, object]:
