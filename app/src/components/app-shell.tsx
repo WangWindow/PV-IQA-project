@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react"
 import { Link, NavLink } from "react-router-dom"
 import { FolderClock, LayoutDashboard, LaptopMinimal, Menu, MoonStar, SunMedium } from "lucide-react"
 
-import type { DemoDashboard } from "@/hooks/use-demo-dashboard"
+import type { Dashboard } from "@/hooks/use-dashboard"
 import { useThemeMode } from "@/hooks/use-theme-mode"
 import type { ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
@@ -83,7 +83,7 @@ export function AppShell({
   dashboard,
   children,
 }: {
-  dashboard: DemoDashboard
+  dashboard: Dashboard
   children: ReactNode
 }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)

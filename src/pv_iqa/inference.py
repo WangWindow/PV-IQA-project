@@ -1,82 +1,42 @@
-from __future__ import annotations
-
 from pathlib import Path
 
-import pandas as pd
 import torch
 from PIL import Image
 
-from pv_iqa.config import AppConfig
-from pv_iqa.eval import load_iqa_checkpoint
-from pv_iqa.utils.common import ensure_dir, save_frame, save_json
-from pv_iqa.utils.datasets import IMAGE_EXTENSIONS
+from pv_iqa.config import Config
+from pv_iqa.eval import load_checkpoint
 from pv_iqa.utils.transforms import build_transforms
 
+EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
-def score_image(
-    config: AppConfig,
-    checkpoint_path: str | Path,
-    image_path: str | Path,
-) -> dict[str, float | str]:
-    model, device = load_iqa_checkpoint(config, checkpoint_path)
-    transform = build_transforms(image_size=config.data.image_size, is_train=False)
 
-    resolved = Path(image_path)
-    image = Image.open(resolved).convert("L")
-    if config.data.grayscale_to_rgb:
-        image = image.convert("RGB")
-
-    tensor = transform(image).unsqueeze(0).to(device)
+def score_image(config: Config, ckpt: str | Path, img_path: str | Path) -> dict:
+    m, dev = load_checkpoint(config, ckpt)
+    t = build_transforms(image_size=config.image_size, is_train=False)
+    img = Image.open(img_path).convert("L")
+    if config.grayscale_to_rgb:
+        img = img.convert("RGB")
+    x = t(img).unsqueeze(0).to(dev)
     with torch.no_grad():
-        score = float(model(tensor)["score"].item())
-    return {"image_path": str(resolved), "quality_score": score}
+        s = float(m(x).item())
+    return {"image_path": str(img_path), "quality_score": s}
 
 
-def score_folder(
-    config: AppConfig,
-    checkpoint_path: str | Path,
-    image_root: str | Path,
-) -> list[dict[str, float | str]]:
-    model, device = load_iqa_checkpoint(config, checkpoint_path)
-    transform = build_transforms(image_size=config.data.image_size, is_train=False)
-    records: list[dict[str, float | str]] = []
-
-    for image_path in sorted(Path(image_root).rglob("*")):
-        if image_path.suffix.lower() not in IMAGE_EXTENSIONS:
+def score_folder(config: Config, ckpt: str | Path, folder: str | Path) -> list[dict]:
+    m, dev = load_checkpoint(config, ckpt)
+    t = build_transforms(image_size=config.image_size, is_train=False)
+    res = []
+    for p in sorted(Path(folder).rglob("*")):
+        if p.suffix.lower() not in EXTS:
             continue
 
-        image = Image.open(image_path).convert("L")
-        if config.data.grayscale_to_rgb:
-            image = image.convert("RGB")
+        img = Image.open(p).convert("L")
 
-        tensor = transform(image).unsqueeze(0).to(device)
+        if config.grayscale_to_rgb:
+            img = img.convert("RGB")
+
+        x = t(img).unsqueeze(0).to(dev)
+
         with torch.no_grad():
-            score = float(model(tensor)["score"].item())
-        records.append({"image_path": str(image_path), "quality_score": score})
-    return records
-
-
-def predict_folder(
-    config: AppConfig,
-    checkpoint_path: str | Path,
-    image_root: str | Path,
-) -> Path:
-    records = score_folder(config, checkpoint_path, image_root)
-    output_path = (
-        ensure_dir(config.experiment_dir / "detect") / "folder_predictions.csv"
-    )
-    save_frame(pd.DataFrame(records), output_path)
-    return output_path
-
-
-def predict_image(
-    config: AppConfig,
-    checkpoint_path: str | Path,
-    image_path: str | Path,
-) -> Path:
-    record = score_image(config, checkpoint_path, image_path)
-    output_path = (
-        ensure_dir(config.experiment_dir / "detect") / "single_prediction.json"
-    )
-    save_json(output_path, record)
-    return output_path
+            res.append({"image_path": str(p), "quality_score": float(m(x).item())})
+    return res

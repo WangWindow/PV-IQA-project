@@ -2,7 +2,7 @@ import type { ReactNode } from "react"
 
 import { cn } from "@/lib/utils"
 
-export function DemoStatCard({
+export function StatCard({
   label,
   value,
   hint,

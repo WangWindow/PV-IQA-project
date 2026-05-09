@@ -1,4 +1,4 @@
-import type { BackendHealth, InferenceBackend, JobStatus, ScoreResult } from "@/lib/types"
+import type { InferenceBackend, JobStatus, ScoreResult } from "@/lib/types"
 
 export function formatTime(value: string | null): string {
   if (!value) {
@@ -57,50 +57,9 @@ export function backendText(backend: InferenceBackend): string {
   return backend === "rust" ? "Rust" : "Python"
 }
 
-export function deviceText(device?: string | null): string {
-  if (!device) {
-    return "未知"
-  }
-  const normalized = device.toLowerCase()
-  if (normalized.startsWith("cuda")) {
-    return "CUDA"
-  }
-  if (normalized === "cpu") {
-    return "CPU"
-  }
-  if (normalized === "mps") {
-    return "MPS"
-  }
-  return device.toUpperCase()
-}
-
-export function backendDeviceText(health?: BackendHealth | null): string {
-  if (!health) {
-    return "检测中"
-  }
-  if (health.state === "starting") {
-    return "启动中"
-  }
-  if (health.state === "idle") {
-    return "待启动"
-  }
-  if (!health.available) {
-    return "异常"
-  }
-  return deviceText(health.device)
-}
-
-export function backendHintText(health?: BackendHealth | null): string {
-  if (!health) {
-    return "正在检测后端状态。"
-  }
-  if (health.available) {
-    return `${health.label} · ${deviceText(health.device)}${health.detail ? ` · ${health.detail}` : ""}`
-  }
-  if (health.state === "starting" || health.state === "idle") {
-    return health.detail ?? `${health.label} 正在准备中。`
-  }
-  return `${health.label} 不可用${health.error ? ` · ${health.error}` : health.detail ? ` · ${health.detail}` : ""}`
+export function backendLabel(backend: InferenceBackend, device: string): string {
+  if (backend === "python") return "Python"
+  return device === "cuda" ? "Rust · CUDA" : "Rust · CPU"
 }
 
 export function averageScore(results: ScoreResult[]): number | null {

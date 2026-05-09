@@ -12,7 +12,7 @@ export type PreviewImage = {
   caption?: string
 }
 
-export function DemoImagePreview({
+export function ImagePreview({
   image,
   onOpenChange,
 }: {

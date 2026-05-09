@@ -2,9 +2,9 @@ import { useMemo, useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
 import { ChartNoAxesCombined, Eye, FolderClock, Image as ImageIcon, PauseCircle, Play, RotateCcw, Trash2 } from "lucide-react"
 
-import type { DemoDashboard } from "@/hooks/use-demo-dashboard"
+import type { Dashboard } from "@/hooks/use-dashboard"
 import type { JobRecord } from "@/lib/types"
-import { buildJobTrendData, buildRankedScoreData, buildScoreDistribution } from "@/lib/demo-analytics"
+import { buildJobTrendData, buildRankedScoreData, buildScoreDistribution } from "@/lib/analytics"
 import {
   backendText,
   clampPercentage,
@@ -13,16 +13,16 @@ import {
   qualityLabel,
   statusText,
   statusVariant,
-} from "@/lib/demo-format"
+} from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { DemoDisclosure } from "@/components/demo/demo-disclosure"
-import { DemoImagePreview, type PreviewImage } from "@/components/demo/demo-image-preview"
-import { DemoStatCard } from "@/components/demo/demo-stat-card"
+import { Disclosure } from "@/components/disclosure"
+import { ImagePreview, type PreviewImage } from "@/components/image-preview"
+import { StatCard } from "@/components/stat-card"
 import {
   JobTrendChart,
   RankedScoreChart,
   ScoreDistributionChart,
-} from "@/components/demo/demo-charts"
+} from "@/components/charts"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -121,8 +121,8 @@ function JobList({
   jobs,
   onPick,
 }: {
-  dashboard: DemoDashboard
-  jobs: DemoDashboard["jobs"]
+  dashboard: Dashboard
+  jobs: Dashboard["jobs"]
   onPick?: () => void
 }) {
   return (
@@ -190,7 +190,7 @@ function JobMetaLine({ job }: { job: JobRecord }) {
   )
 }
 
-export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
+export function HistoryPage({ dashboard }: { dashboard: Dashboard }) {
   const [filter, setFilter] = useState<HistoryFilter>("all")
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false)
@@ -452,9 +452,9 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
                   {selectedJob.kind === "folder" ? (
                     <div className="flex flex-col gap-5">
                       <div className="grid gap-3 md:grid-cols-3">
-                        <DemoStatCard label="平均分" value={formatScore(selectedJob.average_score)} />
-                        <DemoStatCard label="最高分" value={formatScore(selectedJob.best_score)} />
-                        <DemoStatCard label="结果数量" value={String(dashboard.selectedResults.length)} />
+                        <StatCard label="平均分" value={formatScore(selectedJob.average_score)} />
+                        <StatCard label="最高分" value={formatScore(selectedJob.best_score)} />
+                        <StatCard label="结果数量" value={String(dashboard.selectedResults.length)} />
                       </div>
 
                       {dashboard.selectedResults.length ? (
@@ -520,7 +520,7 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
                   ) : null}
 
                   {selectedJob.kind === "folder" && dashboard.selectedResults.length ? (
-                    <DemoDisclosure title="展开任务分析">
+                    <Disclosure title="展开任务分析">
                       <div className="flex flex-col gap-4">
                         <div className="grid gap-4 xl:grid-cols-2">
                           <ScoreDistributionChart
@@ -535,7 +535,7 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
                           />
                         </div>
                       </div>
-                    </DemoDisclosure>
+                    </Disclosure>
                   ) : null}
                 </motion.div>
               )}
@@ -551,9 +551,9 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
           </DialogHeader>
 
           <div className="grid gap-3 md:grid-cols-3">
-            <DemoStatCard label="总任务" value={String(dashboard.jobs.length)} />
-            <DemoStatCard label="已完成任务" value={String(completedJobsWithScores.length)} />
-            <DemoStatCard label="整体均分" value={formatScore(overallAverageScore)} />
+            <StatCard label="总任务" value={String(dashboard.jobs.length)} />
+            <StatCard label="已完成任务" value={String(completedJobsWithScores.length)} />
+            <StatCard label="整体均分" value={formatScore(overallAverageScore)} />
           </div>
 
           <JobTrendChart
@@ -570,7 +570,7 @@ export function HistoryPage({ dashboard }: { dashboard: DemoDashboard }) {
         </DialogContent>
       </Dialog>
 
-      <DemoImagePreview image={previewImage} onOpenChange={(open) => !open && setPreviewImage(null)} />
+      <ImagePreview image={previewImage} onOpenChange={(open) => !open && setPreviewImage(null)} />
 
       <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTargetId(null)}>
         <DialogContent>

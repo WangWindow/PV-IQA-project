@@ -18,17 +18,18 @@ import type {
   JobSummary,
   UploadItem,
 } from "@/lib/types"
-import { averageScore } from "@/lib/demo-format"
+import { averageScore } from "@/lib/format"
 import { filesToUploadItems, readDroppedItems } from "@/lib/uploads"
 
 export type UploadMode = "image" | "folder"
 
-export type DemoDashboardState = {
+export type DashboardState = {
   mode: UploadMode
   health: HealthResponse | null
   jobs: JobSummary[]
   selectedJob: JobRecord | null
   backend: InferenceBackend
+  device: "cpu" | "cuda"
   runName: string
   singleFile: File | null
   folderItems: UploadItem[]
@@ -46,9 +47,10 @@ export type DemoDashboardState = {
   failedCount: number
 }
 
-export type DemoDashboardActions = {
+export type DashboardActions = {
   setMode: (mode: UploadMode) => void
   setBackend: (backend: InferenceBackend) => void
+  setDevice: (device: "cpu" | "cuda") => void
   setRunName: (value: string) => void
   setDragging: (value: boolean) => void
   clearError: () => void
@@ -64,16 +66,17 @@ export type DemoDashboardActions = {
   removeJob: (jobId: string) => Promise<void>
 }
 
-export type DemoDashboard = DemoDashboardState & DemoDashboardActions
+export type Dashboard = DashboardState & DashboardActions
 
-type DemoDashboardPreferences = {
+type DashboardPreferences = {
   backend?: InferenceBackend
+  device?: "cpu" | "cuda"
   runName?: string
 }
 
-const DASHBOARD_PREFERENCES_KEY = "pv-iqa-demo-preferences:v1"
+const DASHBOARD_PREFERENCES_KEY = "pv-iqa-preferences:v1"
 
-function readDashboardPreferences(): DemoDashboardPreferences {
+function readDashboardPreferences(): DashboardPreferences {
   if (typeof window === "undefined") {
     return {}
   }
@@ -84,9 +87,10 @@ function readDashboardPreferences(): DemoDashboardPreferences {
       return {}
     }
 
-    const parsed = JSON.parse(raw) as DemoDashboardPreferences
+    const parsed = JSON.parse(raw) as DashboardPreferences
     return {
       backend: parsed.backend === "python" || parsed.backend === "rust" ? parsed.backend : undefined,
+      device: parsed.device === "cpu" || parsed.device === "cuda" || parsed.device === "auto" ? parsed.device : undefined,
       runName: typeof parsed.runName === "string" ? parsed.runName : undefined,
     }
   } catch {
@@ -109,13 +113,14 @@ function writeDashboardPreferences(preferences: {
   }
 }
 
-export function useDemoDashboard(): DemoDashboard {
-  const [storedPreferences] = useState<DemoDashboardPreferences>(() => readDashboardPreferences())
+export function useDashboard(): Dashboard {
+  const [storedPreferences] = useState<DashboardPreferences>(() => readDashboardPreferences())
   const [mode, setMode] = useState<UploadMode>("image")
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [jobs, setJobs] = useState<JobSummary[]>([])
   const [selectedJob, setSelectedJob] = useState<JobRecord | null>(null)
   const [backend, setBackend] = useState<InferenceBackend>(storedPreferences.backend ?? "python")
+  const [device, setDevice] = useState<"cpu" | "cuda">(storedPreferences.device ?? "cpu")
   const [runName, setRunName] = useState(storedPreferences.runName ?? "")
   const [singleFile, setSingleFile] = useState<File | null>(null)
   const [folderItems, setFolderItems] = useState<UploadItem[]>([])
@@ -250,6 +255,12 @@ export function useDemoDashboard(): DemoDashboard {
   }, [hasRunningJob, selectedJobId])
 
   useEffect(() => {
+    if (backend === "python") {
+      setDevice("cuda")
+    }
+  }, [backend])
+
+  useEffect(() => {
     if (backend !== "rust") {
       return
     }
@@ -310,12 +321,12 @@ export function useDemoDashboard(): DemoDashboard {
           if (!singleFile) {
             throw new Error("请先选择一张图片。")
           }
-          nextJob = await submitSingleImage(singleFile, backend, effectiveRunName)
+          nextJob = await submitSingleImage(singleFile, backend, device, effectiveRunName)
         } else {
           if (!folderItems.length) {
             throw new Error("请先选择一个文件夹。")
           }
-          nextJob = await submitFolder(folderItems, backend, effectiveRunName)
+          nextJob = await submitFolder(folderItems, backend, device, effectiveRunName)
         }
 
       setSelectedJob(nextJob)
@@ -326,7 +337,7 @@ export function useDemoDashboard(): DemoDashboard {
     } finally {
       setIsSubmitting(false)
     }
-  }, [backend, folderItems, health?.defaultRunName, mode, refreshJobs, resetUploads, runName, singleFile])
+  }, [backend, device, folderItems, health?.defaultRunName, mode, refreshJobs, resetUploads, runName, singleFile])
 
   const selectJob = useCallback(async (jobId: string) => {
     try {
@@ -418,6 +429,7 @@ export function useDemoDashboard(): DemoDashboard {
     jobs,
     selectedJob,
     backend,
+    device,
     runName,
     singleFile,
     folderItems,
@@ -435,6 +447,7 @@ export function useDemoDashboard(): DemoDashboard {
     failedCount,
     setMode,
     setBackend,
+    setDevice,
     setRunName,
     setDragging: setIsDragging,
     clearError,

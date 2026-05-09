@@ -1,9 +1,5 @@
 from .attention import TransposedAttentionBlock
+from .metric_head import ArcMarginHead
 from .mixer import LocalWindowMixer
-from .waveformer import WaveFormerLayer
 
-__all__ = [
-    "LocalWindowMixer",
-    "TransposedAttentionBlock",
-    "WaveFormerLayer",
-]
+__all__ = ["ArcMarginHead", "LocalWindowMixer", "TransposedAttentionBlock"]

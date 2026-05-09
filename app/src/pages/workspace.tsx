@@ -4,12 +4,11 @@ import { Link } from "react-router-dom"
 import { AnimatePresence, motion } from "motion/react"
 import { ChevronDown, FolderOpen, ImagePlus, ListFilter, SlidersHorizontal, UploadCloud } from "lucide-react"
 
-import type { DemoDashboard } from "@/hooks/use-demo-dashboard"
+import type { Dashboard } from "@/hooks/use-dashboard"
 import type { BackendHealth } from "@/lib/types"
-import { buildRankedScoreData, buildScoreDistribution } from "@/lib/demo-analytics"
+import { buildRankedScoreData, buildScoreDistribution } from "@/lib/analytics"
 import {
-  backendDeviceText,
-  backendHintText,
+  backendLabel,
   backendText,
   clampPercentage,
   compactFileSize,
@@ -18,12 +17,12 @@ import {
   qualityLabel,
   statusText,
   statusVariant,
-} from "@/lib/demo-format"
+} from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { DemoDisclosure } from "@/components/demo/demo-disclosure"
-import { DemoImagePreview, type PreviewImage } from "@/components/demo/demo-image-preview"
-import { DemoStatCard } from "@/components/demo/demo-stat-card"
-import { RankedScoreChart, ScoreDistributionChart } from "@/components/demo/demo-charts"
+import { Disclosure } from "@/components/disclosure"
+import { ImagePreview, type PreviewImage } from "@/components/image-preview"
+import { StatCard } from "@/components/stat-card"
+import { RankedScoreChart, ScoreDistributionChart } from "@/components/charts"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -58,7 +57,7 @@ function UploadDropzone({
   onChoose,
   onPreview,
 }: {
-  dashboard: DemoDashboard
+  dashboard: Dashboard
   singlePreviewUrl: string | null
   onChoose: () => void
   onPreview: (image: PreviewImage) => void
@@ -177,7 +176,7 @@ function PreviewStrip({
   limit = 6,
   onPreview,
 }: {
-  results: DemoDashboard["selectedResults"]
+  results: Dashboard["selectedResults"]
   limit?: number
   onPreview: (image: PreviewImage) => void
 }) {
@@ -228,7 +227,7 @@ function PreviewStrip({
   )
 }
 
-function ResultPanelSummary({ dashboard }: { dashboard: DemoDashboard }) {
+function ResultPanelSummary({ dashboard }: { dashboard: Dashboard }) {
   const selectedJob = dashboard.selectedJob
 
   if (!selectedJob) {
@@ -270,7 +269,7 @@ function ProcessingState({
   dashboard,
   onPreview,
 }: {
-  dashboard: DemoDashboard
+  dashboard: Dashboard
   onPreview: (image: PreviewImage) => void
 }) {
   const selectedJob = dashboard.selectedJob
@@ -300,13 +299,9 @@ function ProcessingState({
 
 function AdvancedOptions({
   dashboard,
-  activeBackend,
-  pythonBackend,
   rustBackend,
 }: {
-  dashboard: DemoDashboard
-  activeBackend?: BackendHealth | null
-  pythonBackend?: BackendHealth | null
+  dashboard: Dashboard
   rustBackend?: BackendHealth | null
 }) {
   const [open, setOpen] = useState(false)
@@ -328,7 +323,7 @@ function AdvancedOptions({
           <div className="min-w-0">
             <div className="text-sm font-medium">展开运行设置</div>
             <div className="mt-1 truncate text-sm text-muted-foreground">
-              {backendText(dashboard.backend)} · {runSummary}
+              {backendLabel(dashboard.backend, dashboard.device)}
             </div>
           </div>
         </div>
@@ -357,34 +352,43 @@ function AdvancedOptions({
             </Field>
 
             <Field>
-              <FieldLabel>推理后端</FieldLabel>
+              <FieldLabel>推理引擎</FieldLabel>
               <FieldContent>
                 <ToggleGroup
                   type="single"
                   variant="outline"
-                  value={dashboard.backend}
+                  value={`${dashboard.backend}-${dashboard.device}`}
                   onValueChange={(value) => {
-                    if (value === "python" || value === "rust") {
-                      dashboard.setBackend(value)
+                    const [b, d] = value.split("-")
+                    if (b === "python" || b === "rust") {
+                      dashboard.setBackend(b)
+                      dashboard.setDevice(d as "cpu" | "cuda")
                     }
                   }}
                 >
-                  <ToggleGroupItem value="python" aria-label="使用 Python 后端">
+                  <ToggleGroupItem value="python-cuda" aria-label="使用 Python 后端">
                     Python
                   </ToggleGroupItem>
-                  <ToggleGroupItem value="rust" aria-label="使用 Rust 后端">
-                    Rust
+                  <ToggleGroupItem value="rust-cpu" aria-label="使用 Rust CPU 推理">
+                    Rust CPU
+                  </ToggleGroupItem>
+                  <ToggleGroupItem
+                    value="rust-cuda"
+                    aria-label="使用 Rust CUDA GPU 推理"
+                    disabled={!rustBackend?.available || rustBackend?.device !== "cuda"}
+                  >
+                    Rust CUDA
                   </ToggleGroupItem>
                 </ToggleGroup>
-                <FieldDescription>{backendHintText(activeBackend)}</FieldDescription>
-                <div className="flex flex-wrap gap-2 pt-2">
-                  <Badge variant={dashboard.backend === "python" ? "secondary" : "outline"}>
-                    Python {backendDeviceText(pythonBackend)}
-                  </Badge>
-                  <Badge variant={dashboard.backend === "rust" ? "secondary" : "outline"}>
-                    Rust {backendDeviceText(rustBackend)}
-                  </Badge>
-                </div>
+                <FieldDescription>
+                  {dashboard.backend === "python"
+                    ? "PyTorch · CUDA 加速"
+                    : dashboard.device === "cuda"
+                      ? !rustBackend?.available || rustBackend?.device !== "cuda"
+                        ? "CUDA 二进制未构建"
+                        : "candle-onnx · GPU 推理"
+                      : "candle-onnx · CPU 推理"}
+                </FieldDescription>
               </FieldContent>
             </Field>
           </FieldGroup>
@@ -408,7 +412,7 @@ function EmptyResult() {
   )
 }
 
-function RecentJobs({ dashboard }: { dashboard: DemoDashboard }) {
+function RecentJobs({ dashboard }: { dashboard: Dashboard }) {
   const recentJobs = dashboard.jobs.slice(0, 4)
 
   if (!recentJobs.length) {
@@ -451,7 +455,7 @@ function RecentJobs({ dashboard }: { dashboard: DemoDashboard }) {
   )
 }
 
-export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
+export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
   const imageInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null)
@@ -488,9 +492,7 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
 
   const selectedJob = dashboard.selectedJob
   const topResult = dashboard.topResult
-  const pythonBackend = dashboard.health?.backends.python
   const rustBackend = dashboard.health?.backends.rust
-  const activeBackend = dashboard.backend === "python" ? pythonBackend : rustBackend
   const selectedDistribution = useMemo(
     () => buildScoreDistribution(dashboard.selectedResults),
     [dashboard.selectedResults]
@@ -535,10 +537,10 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
 
       <div className="grid items-start gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
         <Card className="h-fit xl:sticky xl:top-5 xl:self-start">
-            <CardHeader>
-              <CardTitle>上传与评分</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-5">
+          <CardHeader>
+            <CardTitle>上传与评分</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-5">
             <Field>
               <FieldLabel>评分模式</FieldLabel>
               <FieldContent>
@@ -610,8 +612,6 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
 
             <AdvancedOptions
               dashboard={dashboard}
-              activeBackend={activeBackend}
-              pythonBackend={pythonBackend}
               rustBackend={rustBackend}
             />
           </CardContent>
@@ -666,8 +666,8 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
                       <Progress value={clampPercentage(topResult.quality_score * 100)} className="h-2" />
 
                       <div className="grid gap-3 sm:grid-cols-2">
-                        <DemoStatCard label="完成时间" value={formatTime(selectedJob.completed_at)} />
-                        <DemoStatCard label="文件名" value={topResult.relative_path} />
+                        <StatCard label="完成时间" value={formatTime(selectedJob.completed_at)} />
+                        <StatCard label="文件名" value={topResult.relative_path} />
                       </div>
                     </div>
                   </motion.div>
@@ -680,9 +680,9 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
                     className="flex flex-col gap-5"
                   >
                     <div className="grid gap-3 md:grid-cols-3">
-                      <DemoStatCard label="平均分" value={formatScore(selectedJob.average_score)} hint="整批图像平均质量" />
-                      <DemoStatCard label="最高分" value={formatScore(selectedJob.best_score)} hint="当前最佳样本" />
-                      <DemoStatCard
+                      <StatCard label="平均分" value={formatScore(selectedJob.average_score)} hint="整批图像平均质量" />
+                      <StatCard label="最高分" value={formatScore(selectedJob.best_score)} hint="当前最佳样本" />
+                      <StatCard
                         label="结果数量"
                         value={String(dashboard.selectedResults.length)}
                         hint={selectedJob.completed_at ? formatTime(selectedJob.completed_at) : "等待完成"}
@@ -708,7 +708,7 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
           </Card>
 
           {selectedJob?.kind === "folder" && dashboard.selectedResults.length ? (
-            <DemoDisclosure
+            <Disclosure
               title="展开质量分析"
               description="仅展示当前任务的分布与排序分析。"
             >
@@ -726,18 +726,18 @@ export function WorkspacePage({ dashboard }: { dashboard: DemoDashboard }) {
                   />
                 </div>
               </div>
-            </DemoDisclosure>
+            </Disclosure>
           ) : null}
 
-          <DemoDisclosure
+          <Disclosure
             title="展开最近任务"
           >
             <RecentJobs dashboard={dashboard} />
-          </DemoDisclosure>
+          </Disclosure>
         </div>
       </div>
 
-      <DemoImagePreview image={previewImage} onOpenChange={(open) => !open && setPreviewImage(null)} />
+      <ImagePreview image={previewImage} onOpenChange={(open) => !open && setPreviewImage(null)} />
     </motion.div>
   )
 }

@@ -1,18 +1,16 @@
 {
-  "name": "app",
+  "name": "pv-iqa",
   "private": true,
-  "version": "0.0.0",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"bun run dev:api\" \"bun run dev:web\"",
     "dev:web": "vite --host 0.0.0.0 --port 6006",
-    "dev:api": "bun --watch server.ts",
-    "stop:api": "../bin/stop-pv-iqa-api",
-    "build": "tsc -b && vite build",
-    "build:web": "tsc -b && vite build",
+    "dev:api": "cd .. && uv run uvicorn app.backend.main:app --host 0.0.0.0 --port 6005 --reload",
     "lint": "eslint .",
-    "preview": "vite preview --host 0.0.0.0 --port 6006",
-    "start": "NODE_ENV=production bun server.ts"
+    "restart": "bun run stop && bun run dev",
+    "stop": "bash scripts/stop.sh",
+    "build": "tsc -b && vite build"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",

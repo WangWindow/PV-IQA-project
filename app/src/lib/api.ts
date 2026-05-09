@@ -64,11 +64,13 @@ export async function rerunJob(jobId: string): Promise<JobRecord> {
 export async function submitSingleImage(
   file: File,
   backend: InferenceBackend,
+  device: "cpu" | "cuda" = "cpu",
   runName?: string
 ): Promise<JobRecord> {
   const formData = new FormData()
   formData.append("file", file)
   formData.append("backend", backend)
+  formData.append("device", device)
   if (runName) {
     formData.append("runName", runName)
   }
@@ -84,6 +86,7 @@ export async function submitSingleImage(
 export async function submitFolder(
   items: UploadItem[],
   backend: InferenceBackend,
+  device: "cpu" | "cuda" = "cpu",
   runName?: string
 ): Promise<JobRecord> {
   const formData = new FormData()
@@ -97,6 +100,7 @@ export async function submitFolder(
   }
   formData.append("manifest", JSON.stringify(manifest))
   formData.append("backend", backend)
+  formData.append("device", device)
 
   if (runName) {
     formData.append("runName", runName)

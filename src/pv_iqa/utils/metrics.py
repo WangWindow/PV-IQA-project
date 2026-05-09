@@ -136,16 +136,16 @@ class VerificationEvaluator:
             negative_scores.append(float(embeddings[left] @ embeddings[right]))
             sampled += 1
 
-        labels = np.concatenate(
-            [
-                np.ones(len(positive_scores), dtype=np.int64),
-                np.zeros(len(negative_scores), dtype=np.int64),
-            ]
-        )
+        labels = np.concatenate([
+            np.ones(len(positive_scores), dtype=np.int64),
+            np.zeros(len(negative_scores), dtype=np.int64),
+        ])
         scores = np.concatenate([positive_scores, negative_scores])
         return labels, scores
 
-    def evaluate(self, embeddings: np.ndarray, class_ids: np.ndarray) -> dict[str, float]:
+    def evaluate(
+        self, embeddings: np.ndarray, class_ids: np.ndarray
+    ) -> dict[str, float]:
         labels, scores = self._sample_pairs(embeddings, class_ids)
         if len(np.unique(labels)) < 2:
             metrics = {"eer": 1.0}
@@ -168,7 +168,9 @@ def classification_accuracy(targets: list[int], predictions: list[int]) -> float
     return evaluate_classification(targets, predictions).accuracy
 
 
-def regression_summary(targets: list[float], predictions: list[float]) -> dict[str, float]:
+def regression_summary(
+    targets: list[float], predictions: list[float]
+) -> dict[str, float]:
     report = evaluate_regression(targets, predictions)
     return {
         "mae": report.mae,

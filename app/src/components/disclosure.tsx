@@ -3,7 +3,7 @@ import { ChevronDown } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-export function DemoDisclosure({
+export function Disclosure({
   title,
   description,
   defaultOpen = false,

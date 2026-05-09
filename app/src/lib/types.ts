@@ -1,7 +1,6 @@
 export type JobKind = "image" | "folder"
 export type JobStatus = "running" | "interrupted" | "completed" | "failed"
 export type InferenceBackend = "python" | "rust"
-
 export type UploadItem = {
   file: File
   relativePath: string
@@ -21,6 +20,7 @@ export type JobSummary = {
   kind: JobKind
   status: JobStatus
   backend: InferenceBackend
+  device: "cpu" | "cuda"
   run_name: string
   input_count: number
   processed_count: number

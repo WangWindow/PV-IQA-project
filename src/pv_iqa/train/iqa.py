@@ -1,206 +1,112 @@
-from __future__ import annotations
-
-import time
 from pathlib import Path
-from typing import Any
 
-import pandas as pd
 import torch
+import torch.nn.functional as F
 from torch.optim import AdamW
 from tqdm.auto import tqdm
 
-from pv_iqa.config import AppConfig
-from pv_iqa.models.iqa import LightweightIQARegressor
+from pv_iqa.config import Config
+from pv_iqa.models.iqa import IQARegressor
 from pv_iqa.utils.common import (
-    create_autocast,
+    autocast,
     ensure_dir,
-    maybe_compile,
-    move_batch_to_device,
     resolve_device,
+    to_device,
 )
 from pv_iqa.utils.datasets import PalmVeinDataset, create_dataloader, load_metadata
 from pv_iqa.utils.logging import ExperimentLogger
-from pv_iqa.utils.losses import build_iqa_objective
 from pv_iqa.utils.metrics import evaluate_regression
 
 
-def prepare_iqa_loaders(config: AppConfig) -> tuple[Any, Any, pd.DataFrame]:
+def train_iqa(config: Config) -> Path:
     metadata = load_metadata(config)
     if "quality_score" not in metadata.columns:
-        raise ValueError(
-            "quality_score column not found. Run `generate-pseudo-labels` first."
-        )
+        raise ValueError("quality_score not found. Run pseudo-label generation first.")
 
-    train_dataset = PalmVeinDataset(
-        metadata,
-        split=config.iqa.train_split,
-        image_size=config.data.image_size,
-        target_kind="quality_score",
-        is_train=True,
-        grayscale_to_rgb=config.data.grayscale_to_rgb,
-    )
-    val_dataset = PalmVeinDataset(
-        metadata,
-        split=config.iqa.val_split,
-        image_size=config.data.image_size,
-        target_kind="quality_score",
-        is_train=False,
-        grayscale_to_rgb=config.data.grayscale_to_rgb,
-    )
-
-    train_loader = create_dataloader(
-        train_dataset,
-        batch_size=config.data.batch_size,
-        num_workers=config.runtime.num_workers,
-        shuffle=True,
-        pin_memory=config.data.pin_memory,
-    )
-    val_loader = create_dataloader(
-        val_dataset,
-        batch_size=config.data.eval_batch_size,
-        num_workers=config.runtime.num_workers,
-        shuffle=False,
-        pin_memory=config.data.pin_memory,
-    )
-    return train_loader, val_loader, metadata
-
-
-def build_iqa_model(config: AppConfig) -> LightweightIQARegressor:
-    return LightweightIQARegressor(
-        backbone_name=config.iqa.backbone,
-        pretrained=config.iqa.pretrained,
-        image_size=config.data.image_size,
-        use_waveformer_layer=config.iqa.use_waveformer_layer,
-        waveformer_mlp_ratio=config.iqa.waveformer_mlp_ratio,
-    )
-
-
-def train_iqa(config: AppConfig) -> Path:
-    train_loader, val_loader, _ = prepare_iqa_loaders(config)
-    device = resolve_device(config)
+    device = resolve_device(config.device)
     output_dir = ensure_dir(config.experiment_dir / "iqa")
-    logger = ExperimentLogger(config, "iqa", output_dir)
-    model_kwargs = {
-        "backbone_name": config.iqa.backbone,
-        "pretrained": False,
-        "image_size": config.data.image_size,
-        "use_waveformer_layer": config.iqa.use_waveformer_layer,
-        "waveformer_mlp_ratio": config.iqa.waveformer_mlp_ratio,
-    }
+    logger = ExperimentLogger(config, output_dir)
 
-    model = build_iqa_model(config).to(device)
-    model = maybe_compile(model, config)
+    train_set = PalmVeinDataset(metadata, split="train", image_size=config.image_size,
+                                 target_kind="quality_score", is_train=True, grayscale_to_rgb=config.grayscale_to_rgb)
+    val_set = PalmVeinDataset(metadata, split="val", image_size=config.image_size,
+                               target_kind="quality_score", is_train=False, grayscale_to_rgb=config.grayscale_to_rgb)
+    train_loader = create_dataloader(train_set, batch_size=config.batch_size, num_workers=config.num_workers, shuffle=True)
+    val_loader = create_dataloader(val_set, batch_size=config.eval_batch_size, num_workers=config.num_workers, shuffle=False)
 
-    optimizer = AdamW(
-        model.parameters(),
-        lr=config.iqa.learning_rate,
-        weight_decay=config.iqa.weight_decay,
+    model = IQARegressor(config.iqa_backbone, pretrained=config.iqa_pretrained).to(device)
+    opt = AdamW(model.parameters(), lr=config.iqa_lr, weight_decay=config.iqa_wd)
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        opt, start_factor=0.01, total_iters=config.iqa_warmup_epochs * len(train_loader)
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=max(1, config.iqa.epochs),
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=config.iqa_epochs - config.iqa_warmup_epochs
     )
-    criterion = build_iqa_objective(
-        delta=config.iqa.huber_delta,
-        ranking_margin=config.iqa.ranking_margin,
-        ranking_weight=config.iqa.ranking_weight,
-        min_ranking_gap=config.iqa.min_ranking_gap,
+    sched = torch.optim.lr_scheduler.SequentialLR(
+        opt, schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[config.iqa_warmup_epochs * len(train_loader)]
     )
-    scaler = torch.GradScaler(enabled=device.type == "cuda" and config.runtime.amp)
+    scaler = torch.GradScaler(enabled=device.type == "cuda" and config.amp)
 
     best_mae = float("inf")
-    best_checkpoint = output_dir / "best.pt"
-    best_epoch = 0
+    best_path = output_dir / "best.pt"
 
-    for epoch in range(1, config.iqa.epochs + 1):
-        epoch_start = time.perf_counter()
+    for epoch in range(1, config.iqa_epochs + 1):
         model.train()
-        train_losses: list[float] = []
-        train_huber_losses: list[float] = []
-        train_ranking_losses: list[float] = []
-
-        # IQA 训练阶段同时优化回归损失和排序损失。
         for batch in tqdm(train_loader, desc=f"iqa-train-{epoch}", leave=False):
-            batch = move_batch_to_device(batch, device)
-            optimizer.zero_grad(set_to_none=True)
+            batch = to_device(batch, device)
+            opt.zero_grad(set_to_none=True)
 
-            with create_autocast(device, config.runtime.amp):
-                outputs = model(batch["image"])
-                loss_output = criterion(outputs["score"], batch["target"].float())
+            with autocast(device, config.amp):
+                pred = model(batch["image"])
+                target = batch["target"].float()
 
-            scaler.scale(loss_output.total).backward()
-            scaler.step(optimizer)
+                # PGRG: Huber regression loss
+                l_huber = F.huber_loss(pred, target, delta=config.iqa_huber_delta)
+
+                # PGRG label-based ranking loss (Eq.10-11): normalize predictions first
+                t_i = target[:, None]
+                t_j = target[None, :]
+
+                pair_gap = t_i - t_j
+                valid = pair_gap > config.iqa_min_rank_gap
+
+                if valid.any():
+                    p_norm = (pred - pred.min()) / (pred.max() - pred.min() + 1e-8)
+                    pn_i = p_norm.unsqueeze(1).expand(-1, len(pred))
+                    pn_j = p_norm.unsqueeze(0).expand(len(pred), -1)
+                    l_rank = torch.relu(pn_j[valid] - pn_i[valid]).mean()
+                else:
+                    l_rank = torch.zeros((), device=device)
+
+                loss = l_huber + config.iqa_rank_weight * l_rank
+
+            scaler.scale(loss).backward()
+            scaler.unscale_(opt)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.iqa_grad_clip)
+            scaler.step(opt)
             scaler.update()
-            train_losses.append(float(loss_output.total.detach().item()))
-            train_huber_losses.append(float(loss_output.huber.detach().item()))
-            train_ranking_losses.append(float(loss_output.ranking.detach().item()))
+
+        sched.step()
 
         model.eval()
-        predictions: list[float] = []
-        targets: list[float] = []
-        val_losses: list[float] = []
-        val_huber_losses: list[float] = []
-        val_ranking_losses: list[float] = []
-
+        preds, targets = [], []
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"iqa-val-{epoch}", leave=False):
-                batch = move_batch_to_device(batch, device)
-                outputs = model(batch["image"])
-                loss_output = criterion(outputs["score"], batch["target"].float())
-                val_losses.append(float(loss_output.total.detach().item()))
-                val_huber_losses.append(float(loss_output.huber.detach().item()))
-                val_ranking_losses.append(float(loss_output.ranking.detach().item()))
-                predictions.extend(outputs["score"].cpu().tolist())
+                batch = to_device(batch, device)
+                pred = model(batch["image"])
+                preds.extend(pred.cpu().tolist())
                 targets.extend(batch["target"].cpu().tolist())
 
-        summary = evaluate_regression(
-            targets,
-            predictions,
-            min_ranking_gap=config.iqa.min_ranking_gap,
-        )
-        if summary.mae <= best_mae:
-            best_mae = summary.mae
-            best_epoch = epoch
-            torch.save(
-                {
-                    "model_state": model.state_dict(),
-                    "best_mae": best_mae,
-                    "best_epoch": best_epoch,
-                    "model_kwargs": model_kwargs,
-                },
-                best_checkpoint,
-            )
+        report = evaluate_regression(targets, preds)
+        logger.info(f"Epoch {epoch:3d} | MAE={report.mae:.4f} RMSE={report.rmse:.4f} ρ={report.spearman:.3f}")
 
-        logger.log_metrics(
-            {
-                "iqa/train_loss": float(sum(train_losses) / max(1, len(train_losses))),
-                "iqa/train_huber": float(
-                    sum(train_huber_losses) / max(1, len(train_huber_losses))
-                ),
-                "iqa/train_ranking": float(
-                    sum(train_ranking_losses) / max(1, len(train_ranking_losses))
-                ),
-                "iqa/val_loss": float(sum(val_losses) / max(1, len(val_losses))),
-                "iqa/val_mae": summary.mae,
-                "iqa/val_rmse": summary.rmse,
-                "iqa/val_huber": float(
-                    sum(val_huber_losses) / max(1, len(val_huber_losses))
-                ),
-                "iqa/val_ranking": float(
-                    sum(val_ranking_losses) / max(1, len(val_ranking_losses))
-                ),
-                "iqa/val_pearson": summary.pearson,
-                "iqa/val_spearman": summary.spearman,
-                "iqa/val_ranking_accuracy": summary.ranking_accuracy,
-                "iqa/epoch_seconds": time.perf_counter() - epoch_start,
-                "iqa/lr": float(optimizer.param_groups[0]["lr"]),
-                "iqa/best_mae": best_mae,
-                "iqa/best_epoch": float(best_epoch),
-            },
-            step=epoch,
-        )
-        scheduler.step()
+        if report.mae < best_mae:
+            best_mae = report.mae
+            torch.save({"model_state": model.state_dict(),
+                        "backbone": config.iqa_backbone,
+                        "best_mae": best_mae}, best_path)
 
-    logger.info("iqa training finished", best_mae=best_mae, best_epoch=best_epoch)
+    logger.info(f"Best MAE={best_mae:.4f}")
     logger.finish()
-    return best_checkpoint
+    return best_path

@@ -2,22 +2,22 @@ import { lazy, Suspense } from "react"
 import { AnimatePresence } from "motion/react"
 import { Navigate, Route, Routes, useLocation } from "react-router-dom"
 
-import { AppShell } from "@/components/demo/app-shell"
-import { useDemoDashboard } from "@/hooks/use-demo-dashboard"
+import { AppShell } from "@/components/app-shell"
+import { useDashboard } from "@/hooks/use-dashboard"
 import { Spinner } from "@/components/ui/spinner"
 
 const WorkspacePage = lazy(async () => {
-  const module = await import("@/components/demo/workspace-page")
+  const module = await import("@/pages/workspace")
   return { default: module.WorkspacePage }
 })
 
 const HistoryPage = lazy(async () => {
-  const module = await import("@/components/demo/history-page")
+  const module = await import("@/pages/history")
   return { default: module.HistoryPage }
 })
 
 function App() {
-  const dashboard = useDemoDashboard()
+  const dashboard = useDashboard()
   const location = useLocation()
 
   return (

@@ -1,90 +1,34 @@
-from __future__ import annotations
-
 import logging
-from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
-from typing import Any
 
-import wandb
-
-from pv_iqa.config import AppConfig
-from pv_iqa.utils.common import ensure_dir, save_json
-
-
-def setup_logging(log_dir: str | Path) -> logging.Logger:
-    ensure_dir(log_dir)
-    logger = logging.getLogger("pv_iqa")
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-
-    formatter = logging.Formatter(
-        fmt="%(asctime)s | %(levelname)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-
-    file_handler = logging.FileHandler(Path(log_dir) / "run.log", encoding="utf-8")
-    file_handler.setFormatter(formatter)
-
-    logger.addHandler(stream_handler)
-    logger.addHandler(file_handler)
-    logger.propagate = False
-    return logger
+from pv_iqa.config import Config
+from pv_iqa.utils.common import ensure_dir
 
 
 class ExperimentLogger:
-    def __init__(self, config: AppConfig, run_name: str, output_dir: Path) -> None:
-        self.config = config
-        self.run_name = run_name
-        self.output_dir = output_dir
-        self.logger = setup_logging(output_dir)
-        self._wandb_enabled = config.logger.use_wandb
-        self._wandb_run = None
-        self.wandb_name = f"{datetime.now():%Y%m%d-%H%M%S}-{run_name}"
+    def __init__(self, config: Config, output_dir: Path) -> None:
+        ensure_dir(output_dir)
+        self.logger = logging.getLogger("pv_iqa")
+        self.logger.setLevel(logging.INFO)
+        self.logger.handlers.clear()
 
-        save_json(output_dir / "config.json", asdict(config))
-        if self._wandb_enabled:
-            self._wandb_run = wandb.init(
-                project=config.logger.wandb_project,
-                entity=config.logger.wandb_entity,
-                name=self.wandb_name,
-                mode=config.logger.wandb_mode,
-                tags=config.logger.tags,
-                group=config.experiment.name,
-                job_type=run_name,
-                config=asdict(config),
-                dir=str(output_dir),
-                reinit="finish_previous",
-            )
-            self.logger.info(
-                "wandb initialized | %s",
-                {
-                    "name": self.wandb_name,
-                    "group": config.experiment.name,
-                    "job_type": run_name,
-                },
-            )
+        fmt = logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(message)s", "%Y-%m-%d %H:%M:%S"
+        )
 
-    def info(self, message: str, **extra: Any) -> None:
-        if extra:
-            message = f"{message} | {extra}"
-        self.logger.info(message)
+        sh = logging.StreamHandler()
+        sh.setFormatter(fmt)
+        self.logger.addHandler(sh)
 
-    def log_metrics(self, metrics: dict[str, float], step: int | None = None) -> None:
-        self.logger.info("metrics=%s step=%s", metrics, step)
-        if self._wandb_run is not None:
-            self._wandb_run.log(metrics, step=step)
+        fh = logging.FileHandler(output_dir / "run.log", encoding="utf-8")
+        fh.setFormatter(fmt)
+        self.logger.addHandler(fh)
 
-    def log_artifact(self, name: str, path: str | Path) -> None:
-        artifact_path = Path(path)
-        self.logger.info("artifact=%s path=%s", name, artifact_path)
-        if self._wandb_run is not None:
-            artifact = wandb.Artifact(name=name, type="dataset")
-            artifact.add_file(str(artifact_path))
-            self._wandb_run.log_artifact(artifact)
+        self.logger.propagate = False
+
+    def info(self, msg: str) -> None:
+        self.logger.info(msg)
 
     def finish(self) -> None:
-        if self._wandb_run is not None:
-            self._wandb_run.finish()
+        for h in self.logger.handlers:
+            h.close()
