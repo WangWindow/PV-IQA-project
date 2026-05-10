@@ -21,10 +21,9 @@ export type RankedScorePoint = {
 }
 
 const QUALITY_BANDS = [
-  { name: "优秀", min: 0.85 },
-  { name: "良好", min: 0.65 },
-  { name: "一般", min: 0.45 },
-  { name: "偏低", min: 0 },
+  { name: "好", min: 65 },
+  { name: "中", min: 35 },
+  { name: "差", min: 0 },
 ] as const
 
 export function scoreSpread(results: ScoreResult[]): number | null {

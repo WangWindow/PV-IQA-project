@@ -38,3 +38,4 @@ bin/
 temp/
 dataset[s]/
 checkpoints/
+.sisyphus/

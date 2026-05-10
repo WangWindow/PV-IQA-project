@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type { ChangeEvent, DragEvent } from "react"
 import { Link } from "react-router-dom"
 import { AnimatePresence, motion } from "motion/react"
-import { ChevronDown, FolderOpen, ImagePlus, ListFilter, SlidersHorizontal, UploadCloud } from "lucide-react"
+import { ChevronDown, Download, FolderOpen, ImagePlus, ListFilter, SlidersHorizontal, UploadCloud } from "lucide-react"
 
 import type { Dashboard } from "@/hooks/use-dashboard"
 import type { BackendHealth } from "@/lib/types"
@@ -18,7 +18,7 @@ import {
   statusText,
   statusVariant,
 } from "@/lib/format"
-import { cn } from "@/lib/utils"
+import { cn, downloadCsv } from "@/lib/utils"
 import { Disclosure } from "@/components/disclosure"
 import { ImagePreview, type PreviewImage } from "@/components/image-preview"
 import { StatCard } from "@/components/stat-card"
@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardHeader,
   CardTitle,
@@ -580,6 +581,31 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
           <Card>
             <CardHeader>
               <CardTitle>结果面板</CardTitle>
+              {selectedJob && dashboard.selectedResults.length > 0 ? (
+                <CardAction>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const headers = ["文件名", "相对路径", "质量分数", "评分等级"]
+                      const rows = dashboard.selectedResults.map((r) => [
+                        r.relative_path.split("/").pop() || r.relative_path,
+                        r.relative_path,
+                        r.quality_score.toFixed(2),
+                        qualityLabel(r.quality_score),
+                      ])
+                      downloadCsv(
+                        `pv-iqa-${selectedJob.id.slice(0, 8)}.csv`,
+                        headers,
+                        rows
+                      )
+                    }}
+                  >
+                    <Download aria-hidden="true" data-icon="inline-start" />
+                    导出 CSV
+                  </Button>
+                </CardAction>
+              ) : null}
             </CardHeader>
             <CardContent>
               <ResultPanelSummary dashboard={dashboard} />
@@ -622,7 +648,7 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
                         </div>
                       </div>
 
-                      <Progress value={clampPercentage(topResult.quality_score * 100)} className="h-2" />
+                      <Progress value={clampPercentage(topResult.quality_score)} className="h-2" />
 
                       <div className="grid gap-3 sm:grid-cols-2">
                         <StatCard label="完成时间" value={formatTime(selectedJob.completed_at)} />
@@ -676,7 +702,7 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
                   <ScoreDistributionChart
                     data={selectedDistribution}
                     title="质量分布"
-                    description="按优秀 / 良好 / 一般 / 偏低统计当前任务。"
+                    description="按好 / 中 / 差统计当前任务。"
                   />
                   <RankedScoreChart
                     data={selectedRankedScores}

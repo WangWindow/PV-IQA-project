@@ -41,16 +41,13 @@ export function statusVariant(status: JobStatus): "secondary" | "destructive" | 
 }
 
 export function qualityLabel(score: number): string {
-  if (score >= 0.85) {
-    return "优秀"
+  if (score >= 65) {
+    return "好"
   }
-  if (score >= 0.65) {
-    return "良好"
+  if (score >= 35) {
+    return "中"
   }
-  if (score >= 0.45) {
-    return "一般"
-  }
-  return "偏低"
+  return "差"
 }
 
 export function backendText(backend: InferenceBackend): string {
@@ -69,7 +66,7 @@ export function averageScore(results: ScoreResult[]): number | null {
   return results.reduce((sum, item) => sum + item.quality_score, 0) / results.length
 }
 
-export function formatScore(value: number | null | undefined, digits = 4): string {
+export function formatScore(value: number | null | undefined, digits = 2): string {
   if (value == null || Number.isNaN(value)) {
     return "—"
   }

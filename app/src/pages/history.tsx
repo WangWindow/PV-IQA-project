@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
-import { ChartNoAxesCombined, Eye, FolderClock, Image as ImageIcon, PauseCircle, Play, RotateCcw, Trash2 } from "lucide-react"
+import { ChartNoAxesCombined, Download, Eye, FolderClock, Image as ImageIcon, PauseCircle, Play, RotateCcw, Trash2 } from "lucide-react"
 
 import type { Dashboard } from "@/hooks/use-dashboard"
 import type { JobRecord } from "@/lib/types"
@@ -14,7 +14,7 @@ import {
   statusText,
   statusVariant,
 } from "@/lib/format"
-import { cn } from "@/lib/utils"
+import { cn, downloadCsv } from "@/lib/utils"
 import { Disclosure } from "@/components/disclosure"
 import { ImagePreview, type PreviewImage } from "@/components/image-preview"
 import { StatCard } from "@/components/stat-card"
@@ -356,6 +356,29 @@ export function HistoryPage({ dashboard }: { dashboard: Dashboard }) {
                   {selectedJob.status === "running" ? "强制删除" : "删除"}
                 </Button>
               ) : null}
+              {selectedJob && dashboard.selectedResults.length > 0 ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const headers = ["文件名", "相对路径", "质量分数", "评分等级"]
+                    const rows = dashboard.selectedResults.map((r) => [
+                      r.relative_path.split("/").pop() || r.relative_path,
+                      r.relative_path,
+                      r.quality_score.toFixed(2),
+                      qualityLabel(r.quality_score),
+                    ])
+                    downloadCsv(
+                      `pv-iqa-${selectedJob.id.slice(0, 8)}.csv`,
+                      headers,
+                      rows
+                    )
+                  }}
+                >
+                  <Download aria-hidden="true" data-icon="inline-start" />
+                  导出 CSV
+                </Button>
+              ) : null}
             </CardAction>
           </CardHeader>
           <CardContent>
@@ -440,7 +463,7 @@ export function HistoryPage({ dashboard }: { dashboard: Dashboard }) {
                             <Badge variant="secondary">{qualityLabel(topResult.quality_score)}</Badge>
                           </div>
                         </div>
-                        <Progress value={clampPercentage(topResult.quality_score * 100)} className="h-2" />
+                        <Progress value={clampPercentage(topResult.quality_score)} className="h-2" />
                         <div className="rounded-xl border bg-muted/10 p-4">
                           <div className="text-sm text-muted-foreground">文件路径</div>
                           <div className="mt-2 break-all font-medium">{topResult.relative_path}</div>
@@ -526,7 +549,7 @@ export function HistoryPage({ dashboard }: { dashboard: Dashboard }) {
                           <ScoreDistributionChart
                             data={selectedDistribution}
                             title="质量分布"
-                            description="按优秀 / 良好 / 一般 / 偏低统计当前任务。"
+                            description="按好 / 中 / 差统计当前任务。"
                           />
                           <RankedScoreChart
                             data={selectedRankedScores}
