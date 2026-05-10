@@ -18,7 +18,7 @@ def main():
     config = Config().resolve()
     config.device = "cuda"
     config.recog_epochs = 20
-    config.iqa_epochs = 35
+    config.iqa_epochs = 20
     config.iqa_lr = 1e-3
     set_seed(config.seed)
 
