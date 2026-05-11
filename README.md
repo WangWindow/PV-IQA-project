@@ -5,14 +5,14 @@
 ## 核心算法
 
 $$
-Q = 100 \times \text{minmax}\big(Q^P + \alpha \cdot \text{CR} + \beta \cdot \text{WD}\big)
+Q = 100 \times \text{minmax}\big(Q^P + \beta \cdot \text{WD} + \gamma \cdot Q^V\big)
 $$
 
 | 分量 | 来源 | 公式 |
 |------|------|------|
 | $Q^P$ | PGRG (Zou et al., 2023) | 类内余弦相似度均值 |
-| CR | CR-FIQA (Boutros et al., 2021) | $\cos(e_i, w_y) \;/\; (\max_{j \neq y} \cos(e_i, w_j) + 1 + \varepsilon)$ |
 | WD | SDD-FIQA (Ou et al., 2021) | 类内/类间 Wasserstein 距离 |
+| $Q^V$ | 像素级视觉质量 | Laplacian 方差 + RMS 对比度 + 曝光平衡 |
 
 ## 训练
 
@@ -29,8 +29,8 @@ uv run python train.py
 | 参数 | 示例值 | 说明 |
 |------|--------|------|
 | `iqa_backbone` | `mobilenetv3_large_100` | IQA 回归模型 backbone |
-| `pseudo_alpha` | `0.5` | CR 分量权重 |
-| `pseudo_beta` | `0.0` | WD 分量权重（0=禁用） |
+| `pseudo_beta` | `0.1` | WD 分量权重（0=禁用） |
+| `pseudo_gamma` | `1.0` | Q^V 视觉质量分量权重 |
 | `iqa_epochs` | `20` | IQA 训练轮数 |
 | `iqa_huber_delta` | `0.1` | Huber loss delta |
 | `iqa_rank_weight` | `0.3` | 排序损失权重 |

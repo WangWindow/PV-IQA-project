@@ -73,10 +73,6 @@ def compute_visual_quality(
 # Core pseudo-label computation
 #   Q = 100 × minmax( δ·Q^P_norm + β·WD_norm + γ·Q^V_norm )
 # Components: PGRG (Q^P) + SDD-FIQA (WD) + Visual Quality (Q^V)
-#
-# Note: CR-FIQA component deliberately excluded — CR is designed for
-# joint training (ArcFace + regression head), not as a static pseudo-label
-# (Boutros et al., CVPR 2023, Sec.3.4).
 # ---------------------------------------------------------------------------
 
 
@@ -88,7 +84,6 @@ def compute_pseudo_labels(
     beta: float = 0.0,
     gamma: float = 0.0,
     qv: np.ndarray | None = None,
-    per_component_norm: bool = False,
 ) -> np.ndarray:
     """3-component pseudo-label fusion for unsupervised palm vein IQA.
 
@@ -106,7 +101,6 @@ def compute_pseudo_labels(
         beta: WD weight (default 0.0, 0 = disable).
         gamma: Q^V weight (default 0.0, 0 = disable).
         qv: pre-computed visual quality scores (N,), optional.
-        per_component_norm: if True, minmax each component before fusion.
 
     Returns:
         (N,) float32 array of quality scores in [0, 100].
@@ -147,21 +141,10 @@ def compute_pseudo_labels(
             top_neg = np.partition(s_neg, -k)[-k:]
             qwd[i] = float(wasserstein_distance(s_pos, top_neg))
 
-    # -- 3-component weighted fusion ------------------------------------------
-    if per_component_norm:
-        qp_norm = minmax_scale(qp)
-        qwd_norm = minmax_scale(qwd) if beta > 0 else qwd
-        qv_norm = (
-            minmax_scale(qv)
-            if gamma > 0 and qv is not None
-            else (qv if qv is not None else np.zeros(N, dtype=np.float32))
-        )
-        blended = qp_norm + beta * qwd_norm + gamma * qv_norm
-    else:
-        qv_term = gamma * qv if (gamma > 0 and qv is not None) else 0.0
-        blended = qp + beta * qwd + qv_term
-
-    # -- Final minmax → [0, 100] ----------------------------------------------
+    # -- Weighted fusion → unified minmax → [0, 100] ---------------------------
+    #   Q = 100 × minmax( Q^P + β·WD + γ·Q^V )   (PGRG Eq.5, with added Q^V)
+    qv_term = gamma * qv if (gamma > 0 and qv is not None) else 0.0
+    blended = qp + beta * qwd + qv_term
     scores = 100.0 * minmax_scale(blended)
     return scores.astype(np.float32)
 
@@ -174,7 +157,7 @@ def compute_pseudo_labels(
 #   1. Load pre-computed recognition features (safetensors)
 #   2. Filter by split (class-disjoint: exclude test classes)
 #   3. Optionally compute Q^V from raw images (if gamma > 0)
-#   4. Compute 4-component pseudo-labels via weighted fusion
+#   4. Compute 3-component pseudo-labels via weighted fusion
 #   5. Apply degradation penalty to known low-quality images
 #   6. Attach pseudo-labels to metadata for downstream IQA training
 # ---------------------------------------------------------------------------
@@ -218,13 +201,12 @@ def generate_pseudo_labels(config: Config) -> Path:
         qv = compute_visual_quality(image_paths, weights=qv_weights)
 
     scores = compute_pseudo_labels(
-        embeddings=tensors["embeddings"][idx],
-        classifier_weight=tensors["classifier_weight"],
-        class_ids=tensors["class_ids"][idx],
+        embeddings=tensors["embeddings"][idx].clone(),
+        classifier_weight=tensors["classifier_weight"].clone(),
+        class_ids=tensors["class_ids"][idx].clone(),
         beta=config.pseudo_beta,
         gamma=config.pseudo_gamma,
         qv=qv,
-        per_component_norm=config.pseudo_per_component_norm,
     )
 
     pseudo_df = pd.DataFrame(
@@ -242,12 +224,11 @@ def generate_pseudo_labels(config: Config) -> Path:
             effective_penalty = config.pseudo_degrade_penalty * factors
             pseudo_df["quality_score"] *= 1.0 - effective_penalty
 
-    # Attach to metadata
-    full_meta = pd.read_csv(config.metadata_path).set_index("sample_id")
-    full_meta.loc[pseudo_df["sample_id"], "quality_score"] = pseudo_df.set_index(
-        "sample_id"
-    )["quality_score"]
-    full_meta.reset_index().to_csv(config.metadata_path, index=False)
+    # Attach to metadata — use merge to handle potential duplicate sample_ids safely
+    full_meta = pd.read_csv(config.metadata_path)
+    quality_map = pseudo_df.set_index("sample_id")["quality_score"]
+    full_meta["quality_score"] = full_meta["sample_id"].map(quality_map)
+    full_meta.to_csv(config.metadata_path, index=False)
 
     out = ensure_dir(config.experiment_dir / "pseudo_labels") / "pseudo_labels.csv"
     pseudo_df.to_csv(out, index=False)

@@ -81,7 +81,7 @@ def build_metadata(config: Config) -> pd.DataFrame:
                 recs.append(
                     ImageRecord(
                         str(img),
-                        f"{folder}/{img.stem}",
+                        f"{folder}/{img.name}",
                         folder,
                         pid,
                         pid,
@@ -104,7 +104,7 @@ def build_metadata(config: Config) -> pd.DataFrame:
                 recs.append(
                     ImageRecord(
                         str(img),
-                        f"{folder}/{img.stem}",
+                        f"{folder}/{img.name}",
                         folder,
                         pid,
                         pid,
