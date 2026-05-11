@@ -25,6 +25,13 @@ from pv_iqa.utils.datasets import PalmVeinDataset, create_dataloader, load_metad
 from pv_iqa.utils.logging import ExperimentLogger
 
 
+def _get_recog_splits(config: Config) -> tuple[str, str]:
+    """Return correct split names based on class recognition ratio."""
+    if config.class_recognition_ratio > 0:
+        return "recognition_train", "recognition_val"
+    return "train", "val"
+
+
 def train_recognizer(config: Config) -> Path:
     """Train ArcFace recognizer. Saves best checkpoint by validation accuracy."""
     set_seed(config.seed)
@@ -33,6 +40,7 @@ def train_recognizer(config: Config) -> Path:
     out = ensure_dir(config.experiment_dir / "recognizer")
     logger = ExperimentLogger(config, out)
 
+    train_split, val_split = _get_recog_splits(config)
     num_classes = int(meta["class_id"].nunique())
     model = PalmVeinRecognizer(
         config.recog_backbone,
@@ -64,7 +72,7 @@ def train_recognizer(config: Config) -> Path:
 
     train_ds = PalmVeinDataset(
         meta,
-        split="train",
+        split=train_split,
         image_size=config.image_size,
         target_kind="class_id",
         is_train=True,
@@ -72,7 +80,7 @@ def train_recognizer(config: Config) -> Path:
     )
     val_ds = PalmVeinDataset(
         meta,
-        split="val",
+        split=val_split,
         image_size=config.image_size,
         target_kind="class_id",
         is_train=False,

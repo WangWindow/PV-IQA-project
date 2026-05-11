@@ -20,7 +20,7 @@ class Config:
     metadata_path: str = "auto"             # 元数据 CSV 路径，auto=实验目录下生成
     identity_mode: str = "separate"         # 身份解析模式：separate=左右手分开, merge_person=合并
     image_size: int = 224                   # 输入图像尺寸
-    batch_size: int = 32                    # 训练批次大小
+    batch_size: int = 64                    # 训练批次大小
 
     # 数据集分割，用于训练识别器和 IQA 模型，以及测试
     class_recognition_ratio: float = 0.25   # 识别数据集类占比 (0=复用已有识别器)
