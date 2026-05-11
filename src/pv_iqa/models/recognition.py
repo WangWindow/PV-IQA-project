@@ -1,13 +1,27 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
 
+import timm
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .backbone import RecognitionBackbone
-from .layers.metric_head import ArcMarginHead
+
+class RecognitionBackbone(nn.Module):
+    """识别分支使用的全局特征 backbone 封装。"""
+
+    def __init__(self, backbone_name="mobilenetv3_large_100", *, pretrained: bool):
+        super().__init__()
+        self.model = timm.create_model(
+            model_name=backbone_name,
+            pretrained=pretrained,
+            num_classes=0,
+            global_pool="avg",
+        )
+
+    def forward(self, image: torch.Tensor):
+        return self.model(image)
 
 
 def infer_feature_dim(
@@ -23,10 +37,43 @@ def infer_feature_dim(
     return int(features.shape[1])
 
 
-@dataclass(slots=True)
-class RecognitionOutputs:
-    embeddings: torch.Tensor
-    logits: torch.Tensor
+class ArcMarginHead(nn.Module):
+    """识别分支使用的 ArcFace 分类头。"""
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        scale: float,
+        margin: float,
+    ) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+        self.scale = scale
+        self.margin = margin
+        nn.init.xavier_uniform_(self.weight)
+
+        self.cos_m = math.cos(margin)
+        self.sin_m = math.sin(margin)
+        self.th = math.cos(math.pi - margin)
+        self.mm = math.sin(math.pi - margin) * margin
+
+    def forward(
+        self, embeddings: torch.Tensor, labels: torch.Tensor | None
+    ) -> torch.Tensor:
+        cosine = F.linear(F.normalize(embeddings), F.normalize(self.weight))
+        if labels is None:
+            return cosine * self.scale
+
+        sine = torch.sqrt(torch.clamp(1.0 - cosine.pow(2), min=0.0))
+        phi = cosine * self.cos_m - sine * self.sin_m
+        phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+
+        one_hot = torch.zeros_like(cosine)
+        one_hot.scatter_(1, labels.view(-1, 1), 1.0)
+        logits = (one_hot * phi) + ((1.0 - one_hot) * cosine)
+        return logits * self.scale
 
 
 class PalmVeinRecognizer(nn.Module):
@@ -60,9 +107,9 @@ class PalmVeinRecognizer(nn.Module):
         self,
         image: torch.Tensor,
         labels: torch.Tensor | None = None,
-    ) -> RecognitionOutputs:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         # 先提取全局身份特征，再做归一化嵌入和 ArcFace 分类。
         features = self.backbone(image)
         embeddings = F.normalize(self.embedding(features), dim=1)
         logits = self.head(embeddings, labels)
-        return RecognitionOutputs(embeddings=embeddings, logits=logits)
+        return (embeddings, logits)

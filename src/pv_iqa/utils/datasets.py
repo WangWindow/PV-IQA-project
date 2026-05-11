@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 from PIL import Image
 from sklearn.utils import check_random_state
@@ -55,6 +56,10 @@ def build_metadata(config: Config) -> pd.DataFrame:
     c2id = {c: i for i, c in enumerate(classes)}
     rng = check_random_state(config.seed)
     recs = []
+
+    if config.split_mode == "class":
+        return _build_metadata_class_split(grouped, classes, c2id, rng, config)
+
     for folder, paths in sorted(grouped.items()):
         rng.shuffle(paths)
         splits = _assign_split(
@@ -76,6 +81,91 @@ def build_metadata(config: Config) -> pd.DataFrame:
                     sp,
                 )
             )
+    df = pd.DataFrame(recs)
+    save_csv(df, config.metadata_path)
+    return df
+
+
+def _build_metadata_class_split(
+    grouped: dict[str, list[Path]],
+    classes: list[str],
+    c2id: dict[str, int],
+    rng: np.random.RandomState,  # type: ignore[type-arg]
+    config: Config,
+) -> pd.DataFrame:
+    """Class-disjoint split: recog / quality / test (PGRG Sec.IV-B).
+
+    Classes (identities) are partitioned into up to three groups:
+      - recog classes: for ArcFace recognizer training (if ratio > 0)
+      - quality classes: split into IQA train/val by sample
+      - test classes: held out entirely for final EER/AOC evaluation
+    No class appears in more than one group.
+    """
+    class_ids = list(range(len(classes)))
+    rng.shuffle(class_ids)
+
+    n_recog = int(len(classes) * config.class_split_recog_ratio)
+    n_quality = int(len(classes) * config.class_split_quality_ratio)
+
+    recog_classes = set(class_ids[:n_recog]) if n_recog > 0 else set()
+    test_classes = set(class_ids[n_recog + n_quality :])
+
+    recs = []
+    for folder, paths in sorted(grouped.items()):
+        cn = _resolve_class_name(folder, config.identity_mode)
+        cid = c2id[cn]
+        pid, hs = folder.rsplit("_", maxsplit=1)
+
+        if cid in test_classes:
+            for img in paths:
+                recs.append(
+                    ImageRecord(
+                        str(img),
+                        f"{folder}/{img.stem}",
+                        folder,
+                        pid,
+                        pid,
+                        hs,
+                        cn,
+                        cid,
+                        "test",
+                    )
+                )
+        elif cid in recog_classes:
+            for img in paths:
+                recs.append(
+                    ImageRecord(
+                        str(img),
+                        f"{folder}/{img.stem}",
+                        folder,
+                        pid,
+                        pid,
+                        hs,
+                        cn,
+                        cid,
+                        "recog",
+                    )
+                )
+        else:
+            shuffled = list(paths)
+            rng.shuffle(shuffled)
+            n_train = max(1, int(len(shuffled) * 0.8))
+            for i, img in enumerate(shuffled):
+                sp = "train" if i < n_train else "val"
+                recs.append(
+                    ImageRecord(
+                        str(img),
+                        f"{folder}/{img.stem}",
+                        folder,
+                        pid,
+                        pid,
+                        hs,
+                        cn,
+                        cid,
+                        sp,
+                    )
+                )
+
     df = pd.DataFrame(recs)
     save_csv(df, config.metadata_path)
     return df

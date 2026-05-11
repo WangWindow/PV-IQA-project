@@ -173,14 +173,14 @@ def rust_score(run: str, paths: list[str], device: str, job_id: str = "", total:
 def py_score(run: str, paths: list[str]) -> list[dict[str, object]]:
     sys.path.insert(0, str(REPO / "src"))
     from pv_iqa.config import Config
-    from pv_iqa.inference import score_folder
+    from pv_iqa.eval import score_folder
 
     config = Config()
     config.name = run
     config.metadata_path = str(REPO / "checkpoints" / run / "data" / "metadata.csv")
     checkpoint = str(REPO / "checkpoints" / run / "iqa" / "best.pt")
     if len(paths) == 1:
-        from pv_iqa.inference import score_image
+        from pv_iqa.eval import score_image
         return [score_image(config, checkpoint, paths[0])]
     return score_folder(config, checkpoint, Path(paths[0]).parent)
 
@@ -224,7 +224,7 @@ def process_job(
 ) -> None:
     sys.path.insert(0, str(REPO / "src"))
     from pv_iqa.config import Config
-    from pv_iqa.inference import score_image
+    from pv_iqa.eval import score_image
 
     config = Config()
     config.name = run_name
@@ -299,7 +299,6 @@ def process_job(
 @app.get("/api/health")
 async def health() -> dict[str, object]:
     default_name = default_run_name()
-    cuda_available = BIN_CUDA.exists()
     return {
         "status": "ok",
         "port": 6005,
@@ -310,14 +309,12 @@ async def health() -> dict[str, object]:
                 "label": "Python",
                 "state": "ready",
                 "detail": "PyTorch",
-                "device": "cuda",
             },
             "rust": {
                 "available": True,
                 "label": "Rust",
                 "state": "ready",
                 "detail": "Rust CLI",
-                "device": "cuda" if cuda_available else "cpu",
             },
         },
     }

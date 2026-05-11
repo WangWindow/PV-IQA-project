@@ -6,7 +6,7 @@ from torch.optim import AdamW
 from tqdm.auto import tqdm
 
 from pv_iqa.config import Config
-from pv_iqa.models.iqa import IQARegressor
+from pv_iqa.models import PalmVeinIQARegressor
 from pv_iqa.utils.common import (
     autocast,
     ensure_dir,
@@ -27,14 +27,38 @@ def train_iqa(config: Config) -> Path:
     output_dir = ensure_dir(config.experiment_dir / "iqa")
     logger = ExperimentLogger(config, output_dir)
 
-    train_set = PalmVeinDataset(metadata, split="train", image_size=config.image_size,
-                                 target_kind="quality_score", is_train=True, grayscale_to_rgb=config.grayscale_to_rgb)
-    val_set = PalmVeinDataset(metadata, split="val", image_size=config.image_size,
-                               target_kind="quality_score", is_train=False, grayscale_to_rgb=config.grayscale_to_rgb)
-    train_loader = create_dataloader(train_set, batch_size=config.batch_size, num_workers=config.num_workers, shuffle=True)
-    val_loader = create_dataloader(val_set, batch_size=config.eval_batch_size, num_workers=config.num_workers, shuffle=False)
+    train_set = PalmVeinDataset(
+        metadata,
+        split="train",
+        image_size=config.image_size,
+        target_kind="quality_score",
+        is_train=True,
+        grayscale_to_rgb=config.grayscale_to_rgb,
+    )
+    val_set = PalmVeinDataset(
+        metadata,
+        split="val",
+        image_size=config.image_size,
+        target_kind="quality_score",
+        is_train=False,
+        grayscale_to_rgb=config.grayscale_to_rgb,
+    )
+    train_loader = create_dataloader(
+        train_set,
+        batch_size=config.batch_size,
+        num_workers=config.num_workers,
+        shuffle=True,
+    )
+    val_loader = create_dataloader(
+        val_set,
+        batch_size=config.eval_batch_size,
+        num_workers=config.num_workers,
+        shuffle=False,
+    )
 
-    model = IQARegressor(config.iqa_backbone, pretrained=config.iqa_pretrained).to(device)
+    model = PalmVeinIQARegressor(
+        config.iqa_backbone, pretrained=config.iqa_pretrained
+    ).to(device)
     opt = AdamW(model.parameters(), lr=config.iqa_lr, weight_decay=config.iqa_wd)
     warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
         opt, start_factor=0.01, total_iters=config.iqa_warmup_epochs * len(train_loader)
@@ -43,8 +67,9 @@ def train_iqa(config: Config) -> Path:
         opt, T_max=config.iqa_epochs - config.iqa_warmup_epochs
     )
     sched = torch.optim.lr_scheduler.SequentialLR(
-        opt, schedulers=[warmup_scheduler, cosine_scheduler],
-        milestones=[config.iqa_warmup_epochs * len(train_loader)]
+        opt,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[config.iqa_warmup_epochs * len(train_loader)],
     )
     scaler = torch.GradScaler(enabled=device.type == "cuda" and config.amp)
 
@@ -83,7 +108,9 @@ def train_iqa(config: Config) -> Path:
 
             scaler.scale(loss).backward()
             scaler.unscale_(opt)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.iqa_grad_clip)
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=config.iqa_grad_clip
+            )
             scaler.step(opt)
             scaler.update()
 
@@ -99,13 +126,20 @@ def train_iqa(config: Config) -> Path:
                 targets.extend(batch["target"].cpu().tolist())
 
         report = evaluate_regression(targets, preds)
-        logger.info(f"Epoch {epoch:3d} | MAE={report.mae:.4f} RMSE={report.rmse:.4f} ρ={report.spearman:.3f}")
+        logger.info(
+            f"Epoch {epoch:3d} | MAE={report.mae:.4f} RMSE={report.rmse:.4f} ρ={report.spearman:.3f}"
+        )
 
         if report.mae < best_mae:
             best_mae = report.mae
-            torch.save({"model_state": model.state_dict(),
-                        "backbone": config.iqa_backbone,
-                        "best_mae": best_mae}, best_path)
+            torch.save(
+                {
+                    "model_state": model.state_dict(),
+                    "backbone": config.iqa_backbone,
+                    "best_mae": best_mae,
+                },
+                best_path,
+            )
 
     logger.info(f"Best MAE={best_mae:.4f}")
     logger.finish()

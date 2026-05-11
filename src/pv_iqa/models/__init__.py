@@ -1,5 +1,4 @@
-from .backbone import IQABackbone, RecognitionBackbone
-from .iqa import IQARegressor
+from .iqa import PalmVeinIQARegressor
 from .recognition import PalmVeinRecognizer
 
-__all__ = ["IQABackbone", "IQARegressor", "PalmVeinRecognizer", "RecognitionBackbone"]
+__all__ = ["PalmVeinIQARegressor", "PalmVeinRecognizer"]

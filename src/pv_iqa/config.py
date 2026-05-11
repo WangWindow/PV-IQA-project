@@ -15,6 +15,9 @@ class Config:
     data_root: str = "datasets/ROI_Data"
     metadata_path: str = "auto"
     identity_mode: str = "separate"
+    split_mode: str = "sample"
+    class_split_recog_ratio: float = 0.0
+    class_split_quality_ratio: float = 0.75
     image_size: int = 224
     batch_size: int = 32
     eval_batch_size: int = 64
@@ -35,12 +38,12 @@ class Config:
     recog_warmup_epochs: int = 1
 
     pseudo_split: str = "all"
-    pseudo_alpha: float = 0.5
+    pseudo_delta: float = 1.0
     pseudo_beta: float = 0.0
-    pseudo_negative_samples: int = 512
-    pseudo_gmm_components: int = 2
-    pseudo_min_positive: int = 4
-    pseudo_eps: float = 1e-6
+    pseudo_gamma: float = 0.5
+    pseudo_qv_weights: str = "1,1,1"
+    pseudo_per_component_norm: bool = False
+    pseudo_degrade_penalty: float = 0.0
 
     iqa_backbone: str = "mobilenetv3_large_100"
     iqa_pretrained: bool = True

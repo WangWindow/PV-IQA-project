@@ -7,7 +7,7 @@ from torch.optim import AdamW
 from tqdm.auto import tqdm
 
 from pv_iqa.config import Config
-from pv_iqa.models.recognition import PalmVeinRecognizer
+from pv_iqa.models import PalmVeinRecognizer
 from pv_iqa.utils.common import (
     autocast,
     ensure_dir,
@@ -20,8 +20,16 @@ from pv_iqa.utils.logging import ExperimentLogger
 
 
 def _build_recog(config: Config, num_classes: int, pretrained: bool = True):
-    return PalmVeinRecognizer(config.recog_backbone, num_classes, config.recog_embedding_dim,
-                               config.recog_dropout, config.recog_margin, config.recog_scale, pretrained)
+    return PalmVeinRecognizer(
+        config.recog_backbone,
+        num_classes,
+        config.recog_embedding_dim,
+        config.recog_dropout,
+        config.recog_margin,
+        config.recog_scale,
+        pretrained,
+    )
+
 
 def export_features(config: Config, ckpt_path: str | Path) -> Path:
     meta = load_metadata(config)
@@ -34,8 +42,20 @@ def export_features(config: Config, ckpt_path: str | Path) -> Path:
     embs, cids, sids = [], [], []
     with torch.no_grad():
         for sp in meta["split"].drop_duplicates().tolist():
-            ds = PalmVeinDataset(meta, split=sp, image_size=config.image_size, target_kind="class_id", is_train=False, grayscale_to_rgb=config.grayscale_to_rgb)
-            dl = create_dataloader(ds, batch_size=config.eval_batch_size, num_workers=config.num_workers, shuffle=False)
+            ds = PalmVeinDataset(
+                meta,
+                split=sp,
+                image_size=config.image_size,
+                target_kind="class_id",
+                is_train=False,
+                grayscale_to_rgb=config.grayscale_to_rgb,
+            )
+            dl = create_dataloader(
+                ds,
+                batch_size=config.eval_batch_size,
+                num_workers=config.num_workers,
+                shuffle=False,
+            )
             for b in tqdm(dl, desc=f"export-{sp}", leave=False):
                 b = to_device(b, dev)
                 o = m(b["image"])
@@ -44,10 +64,28 @@ def export_features(config: Config, ckpt_path: str | Path) -> Path:
                 sids.extend(b["sample_id"])
 
     all_emb = torch.cat(embs, dim=0)
-    save_file({"embeddings": all_emb, "classifier_weight": m.head.weight.data, "class_ids": torch.tensor(cids)}, str(out / "features.safetensors"))
+    save_file(
+        {
+            "embeddings": all_emb,
+            "classifier_weight": m.head.weight.data,
+            "class_ids": torch.tensor(cids),
+        },
+        str(out / "features.safetensors"),
+    )
     import pandas as pd
-    pd.DataFrame({"sample_id": sids, "class_id": cids}).to_csv(out / "feature_metadata.csv", index=False)
+
+    pd.DataFrame({"sample_id": sids, "class_id": cids}).to_csv(
+        out / "feature_metadata.csv", index=False
+    )
     return out / "features.safetensors"
+
+
+def _get_recog_splits(config: Config) -> tuple[str, str]:
+    """Return (train_split, val_split) for recognizer training."""
+    if config.split_mode == "class" and config.class_split_recog_ratio > 0:
+        return "recog", "recog"
+    return "train", "val"
+
 
 def train_recognizer(config: Config) -> Path:
     set_seed(config.seed)
@@ -56,18 +94,49 @@ def train_recognizer(config: Config) -> Path:
     out = ensure_dir(config.experiment_dir / "recognizer")
     logger = ExperimentLogger(config, out)
 
+    train_split, val_split = _get_recog_splits(config)
     num_classes = int(meta["class_id"].nunique())
     model = _build_recog(config, num_classes).to(dev)
     opt = AdamW(model.parameters(), lr=config.recog_lr, weight_decay=config.recog_wd)
-    warmup = torch.optim.lr_scheduler.LinearLR(opt, start_factor=0.2, end_factor=1.0, total_iters=config.recog_warmup_epochs)
-    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, config.recog_epochs - config.recog_warmup_epochs))
-    sched = torch.optim.lr_scheduler.SequentialLR(opt, schedulers=[warmup, cosine], milestones=[config.recog_warmup_epochs])
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        opt, start_factor=0.2, end_factor=1.0, total_iters=config.recog_warmup_epochs
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=max(1, config.recog_epochs - config.recog_warmup_epochs)
+    )
+    sched = torch.optim.lr_scheduler.SequentialLR(
+        opt, schedulers=[warmup, cosine], milestones=[config.recog_warmup_epochs]
+    )
     scaler = torch.GradScaler(enabled=dev.type == "cuda" and config.amp)
 
-    train_ds = PalmVeinDataset(meta, split="train", image_size=config.image_size, target_kind="class_id", is_train=True, grayscale_to_rgb=config.grayscale_to_rgb)
-    val_ds = PalmVeinDataset(meta, split="val", image_size=config.image_size, target_kind="class_id", is_train=False, grayscale_to_rgb=config.grayscale_to_rgb)
-    train_loader = create_dataloader(train_ds, batch_size=config.batch_size, num_workers=config.num_workers, shuffle=True)
-    val_loader = create_dataloader(val_ds, batch_size=config.eval_batch_size, num_workers=config.num_workers, shuffle=False)
+    train_ds = PalmVeinDataset(
+        meta,
+        split=train_split,
+        image_size=config.image_size,
+        target_kind="class_id",
+        is_train=True,
+        grayscale_to_rgb=config.grayscale_to_rgb,
+    )
+    val_ds = PalmVeinDataset(
+        meta,
+        split=val_split,
+        image_size=config.image_size,
+        target_kind="class_id",
+        is_train=False,
+        grayscale_to_rgb=config.grayscale_to_rgb,
+    )
+    train_loader = create_dataloader(
+        train_ds,
+        batch_size=config.batch_size,
+        num_workers=config.num_workers,
+        shuffle=True,
+    )
+    val_loader = create_dataloader(
+        val_ds,
+        batch_size=config.eval_batch_size,
+        num_workers=config.num_workers,
+        shuffle=False,
+    )
     loss_fn = torch.nn.CrossEntropyLoss()
 
     best_acc, best_epoch, best_path = 0.0, 0, out / "best.pt"
@@ -96,8 +165,13 @@ def train_recognizer(config: Config) -> Path:
         acc = correct / total
         if acc > best_acc:
             best_acc, best_epoch = acc, epoch
-            torch.save({"model_state": model.state_dict(), "best_accuracy": best_acc}, best_path)
-        logger.info(f"Epoch {epoch:3d} | acc={acc:.4f} best={best_acc:.4f} ({time.perf_counter()-t0:.0f}s)")
+            torch.save(
+                {"model_state": model.state_dict(), "best_accuracy": best_acc},
+                best_path,
+            )
+        logger.info(
+            f"Epoch {epoch:3d} | acc={acc:.4f} best={best_acc:.4f} ({time.perf_counter() - t0:.0f}s)"
+        )
 
     logger.info(f"Best acc={best_acc:.4f} at epoch {best_epoch}")
     logger.finish()
