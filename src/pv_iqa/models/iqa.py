@@ -57,7 +57,7 @@ class PalmVeinIQARegressor(nn.Module):
       stage1 → Conv3×3 → GAP → 32d      (texture/sharpness)
       stage3 → Conv1×1 → GAP → 64d      (mid-level structure)
       stage4 → SE-Attn → GAP → ch4      (semantic quality)
-    concat → FC(128) → Sigmoid×100
+    concat → FC(128) → FC(1)   (linear output, no activation)
     """
 
     def __init__(
@@ -104,6 +104,4 @@ class PalmVeinIQARegressor(nn.Module):
         f1 = self.branch1(feats[0])
         f3 = self.branch3(feats[1])
         f4 = self.branch4(feats[2])
-        return 100.0 * torch.sigmoid(
-            self.head(torch.cat([f1, f3, f4], dim=1)).squeeze(-1)
-        )
+        return self.head(torch.cat([f1, f3, f4], dim=1)).squeeze(-1)
