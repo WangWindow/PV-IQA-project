@@ -1,3 +1,13 @@
+"""IQA regressor training with pseudo-label supervision.
+
+Loss = Huber(pred, pseudo_label) + rank_weight × RankingLoss(pred, pseudo_label)
+
+The label-based ranking loss (PGRG, Zou et al. IEEE TIM 2023, Eq.10-11):
+for any pair (i, j) where pseudo_label_i > pseudo_label_j + min_gap:
+    penalize if pred_i < pred_j
+This preserves the relative ordering of quality scores during training.
+"""
+
 from pathlib import Path
 
 import torch
@@ -7,12 +17,7 @@ from tqdm.auto import tqdm
 
 from pv_iqa.config import Config
 from pv_iqa.models import PalmVeinIQARegressor
-from pv_iqa.utils.common import (
-    autocast,
-    ensure_dir,
-    resolve_device,
-    to_device,
-)
+from pv_iqa.utils.common import autocast, ensure_dir, resolve_device, to_device
 from pv_iqa.utils.datasets import PalmVeinDataset, create_dataloader, load_metadata
 from pv_iqa.utils.logging import ExperimentLogger
 from pv_iqa.utils.metrics import evaluate_regression
@@ -57,18 +62,23 @@ def train_iqa(config: Config) -> Path:
     )
 
     model = PalmVeinIQARegressor(
-        config.iqa_backbone, pretrained=config.iqa_pretrained
+        config.iqa_backbone,
+        pretrained=config.iqa_pretrained,
     ).to(device)
     opt = AdamW(model.parameters(), lr=config.iqa_lr, weight_decay=config.iqa_wd)
-    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-        opt, start_factor=0.01, total_iters=config.iqa_warmup_epochs * len(train_loader)
+
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        opt,
+        start_factor=0.01,
+        total_iters=config.iqa_warmup_epochs * len(train_loader),
     )
-    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        opt, T_max=config.iqa_epochs - config.iqa_warmup_epochs
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt,
+        T_max=config.iqa_epochs - config.iqa_warmup_epochs,
     )
     sched = torch.optim.lr_scheduler.SequentialLR(
         opt,
-        schedulers=[warmup_scheduler, cosine_scheduler],
+        schedulers=[warmup, cosine],
         milestones=[config.iqa_warmup_epochs * len(train_loader)],
     )
     scaler = torch.GradScaler(enabled=device.type == "cuda" and config.amp)
@@ -86,13 +96,13 @@ def train_iqa(config: Config) -> Path:
                 pred = model(batch["image"])
                 target = batch["target"].float()
 
-                # PGRG: Huber regression loss
                 l_huber = F.huber_loss(pred, target, delta=config.iqa_huber_delta)
 
-                # PGRG label-based ranking loss (Eq.10-11): normalize predictions first
+                # Label-based ranking loss (PGRG Eq.10-11):
+                #   L_rank = mean(ReLU(pred_j_norm - pred_i_norm))
+                #   for all pairs where (target_i - target_j) > min_rank_gap
                 t_i = target[:, None]
                 t_j = target[None, :]
-
                 pair_gap = t_i - t_j
                 valid = pair_gap > config.iqa_min_rank_gap
 
@@ -109,7 +119,8 @@ def train_iqa(config: Config) -> Path:
             scaler.scale(loss).backward()
             scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=config.iqa_grad_clip
+                model.parameters(),
+                max_norm=config.iqa_grad_clip,
             )
             scaler.step(opt)
             scaler.update()
@@ -121,13 +132,13 @@ def train_iqa(config: Config) -> Path:
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"iqa-val-{epoch}", leave=False):
                 batch = to_device(batch, device)
-                pred = model(batch["image"])
-                preds.extend(pred.cpu().tolist())
+                preds.extend(model(batch["image"]).cpu().tolist())
                 targets.extend(batch["target"].cpu().tolist())
 
         report = evaluate_regression(targets, preds)
         logger.info(
-            f"Epoch {epoch:3d} | MAE={report.mae:.4f} RMSE={report.rmse:.4f} ρ={report.spearman:.3f}"
+            f"Epoch {epoch:3d} | MAE={report.mae:.4f} "
+            f"RMSE={report.rmse:.4f} ρ={report.spearman:.3f}"
         )
 
         if report.mae < best_mae:

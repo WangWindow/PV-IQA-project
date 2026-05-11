@@ -8,37 +8,24 @@ import torch.nn.functional as F
 from torch import nn
 
 
-class RecognitionBackbone(nn.Module):
-    """识别分支使用的全局特征 backbone 封装。"""
-
-    def __init__(self, backbone_name="mobilenetv3_large_100", *, pretrained: bool):
-        super().__init__()
-        self.model = timm.create_model(
-            model_name=backbone_name,
-            pretrained=pretrained,
-            num_classes=0,
-            global_pool="avg",
-        )
-
-    def forward(self, image: torch.Tensor):
-        return self.model(image)
-
-
-def infer_feature_dim(
-    backbone: nn.Module,
-    *,
-    image_size: int = 224,
-    channels: int = 3,
-) -> int:
-    """用一次 dummy forward 推断识别 backbone 输出维度。"""
-    with torch.no_grad():
-        dummy = torch.zeros(1, channels, image_size, image_size)
-        features = backbone(dummy)
-    return int(features.shape[1])
-
-
+# ---------------------------------------------------------------------------
+# ArcFace (Additive Angular Margin Loss)
+#   Deng et al., "ArcFace: Additive Angular Margin Loss for Deep Face
+#   Recognition", CVPR 2019.
+#
+#   logits_i = s × ( onehot_i × cos(θ + m) + (1 − onehot_i) × cos(θ) )
+#
+#   where:
+#     θ = arccos(cos) = angle between embedding and weight vector
+#     m = angular margin penalty (default 0.5)
+#     s = feature scale (default 64)
+#
+#   The margin penalty forces intra-class embeddings closer and inter-class
+#   embeddings farther apart on the hypersphere, which enables Q^P (intra-class
+#   cosine similarity) to serve as a quality metric.
+# ---------------------------------------------------------------------------
 class ArcMarginHead(nn.Module):
-    """识别分支使用的 ArcFace 分类头。"""
+    """ArcFace classification head (Deng et al., CVPR 2019)."""
 
     def __init__(
         self,
@@ -62,18 +49,43 @@ class ArcMarginHead(nn.Module):
     def forward(
         self, embeddings: torch.Tensor, labels: torch.Tensor | None
     ) -> torch.Tensor:
+        # Cosine similarity between L2-normalized embedding and weight vectors
         cosine = F.linear(F.normalize(embeddings), F.normalize(self.weight))
+
         if labels is None:
             return cosine * self.scale
 
+        # cos(θ + m) = cos(θ)cos(m) − sin(θ)sin(m)
         sine = torch.sqrt(torch.clamp(1.0 - cosine.pow(2), min=0.0))
         phi = cosine * self.cos_m - sine * self.sin_m
+
+        # Numeric stability: when cos(θ + m) < cos(π − m), use cos(θ) − m·sin(m)
         phi = torch.where(cosine > self.th, phi, cosine - self.mm)
 
+        # One-hot mask: use cos(θ + m) for target class, cos(θ) for others
         one_hot = torch.zeros_like(cosine)
         one_hot.scatter_(1, labels.view(-1, 1), 1.0)
         logits = (one_hot * phi) + ((1.0 - one_hot) * cosine)
+
         return logits * self.scale
+
+
+class RecognitionBackbone(nn.Module):
+    """Global feature backbone for palm vein recognition."""
+
+    def __init__(
+        self, backbone_name: str = "mobilenetv3_large_100", *, pretrained: bool
+    ):
+        super().__init__()
+        self.model = timm.create_model(
+            backbone_name,
+            pretrained=pretrained,
+            num_classes=0,
+            global_pool="avg",
+        )
+
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        return self.model(image)
 
 
 class PalmVeinRecognizer(nn.Module):
@@ -87,10 +99,16 @@ class PalmVeinRecognizer(nn.Module):
         scale: float,
         pretrained: bool,
         image_size: int = 224,
+        channels: int = 3,
     ) -> None:
         super().__init__()
         self.backbone = RecognitionBackbone(backbone_name, pretrained=pretrained)
-        feature_dim = infer_feature_dim(self.backbone, image_size=image_size)
+
+        with torch.no_grad():
+            feature_dim = int(
+                self.backbone(torch.zeros(1, channels, image_size, image_size)).shape[1]
+            )
+
         self.embedding = nn.Sequential(
             nn.Dropout(dropout),
             nn.Linear(feature_dim, embedding_dim),
@@ -108,8 +126,7 @@ class PalmVeinRecognizer(nn.Module):
         image: torch.Tensor,
         labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # 先提取全局身份特征，再做归一化嵌入和 ArcFace 分类。
         features = self.backbone(image)
         embeddings = F.normalize(self.embedding(features), dim=1)
         logits = self.head(embeddings, labels)
-        return (embeddings, logits)
+        return embeddings, logits

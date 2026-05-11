@@ -85,7 +85,6 @@ def compute_pseudo_labels(
     classifier_weight: torch.Tensor,
     class_ids: torch.Tensor,
     *,
-    delta: float = 1.0,
     beta: float = 0.0,
     gamma: float = 0.0,
     qv: np.ndarray | None = None,
@@ -104,7 +103,6 @@ def compute_pseudo_labels(
         embeddings: (N, D) L2-normalized feature vectors.
         classifier_weight: (C, D) ArcFace classifier weight vectors.
         class_ids: (N,) integer class labels.
-        delta: Q^P weight (default 1.0, 0 = disable).
         beta: WD weight (default 0.0, 0 = disable).
         gamma: Q^V weight (default 0.0, 0 = disable).
         qv: pre-computed visual quality scores (N,), optional.
@@ -116,6 +114,7 @@ def compute_pseudo_labels(
 
     # -- Normalise & convert --------------------------------------------------
     emb = torch.nn.functional.normalize(embeddings.float(), dim=1).cpu().numpy()
+    w = torch.nn.functional.normalize(classifier_weight.float(), dim=1).cpu().numpy()  # noqa: F841
     labels = class_ids.cpu().numpy().astype(np.int64)
     N = emb.shape[0]
 
@@ -157,10 +156,10 @@ def compute_pseudo_labels(
             if gamma > 0 and qv is not None
             else (qv if qv is not None else np.zeros(N, dtype=np.float32))
         )
-        blended = delta * qp_norm + beta * qwd_norm + gamma * qv_norm
+        blended = qp_norm + beta * qwd_norm + gamma * qv_norm
     else:
         qv_term = gamma * qv if (gamma > 0 and qv is not None) else 0.0
-        blended = delta * qp + beta * qwd + qv_term
+        blended = qp + beta * qwd + qv_term
 
     # -- Final minmax → [0, 100] ----------------------------------------------
     scores = 100.0 * minmax_scale(blended)
@@ -191,9 +190,9 @@ def generate_pseudo_labels(config: Config) -> Path:
         if config.pseudo_split == "all"
         else meta["split"].eq(config.pseudo_split).to_numpy().nonzero()[0]
     )
-    # In class-disjoint mode, exclude test-class samples from pseudo-label generation.
+    # Exclude test-class samples from pseudo-label generation.
     # feature_metadata.csv lacks 'split', so join with full metadata on sample_id.
-    if config.split_mode == "class" and config.pseudo_split == "all":
+    if config.pseudo_split == "all":
         full_meta = pd.read_csv(config.metadata_path)
         test_sids = set(full_meta[full_meta["split"] == "test"]["sample_id"])
         idx = meta[~meta["sample_id"].isin(test_sids)].index.to_numpy()
@@ -222,7 +221,6 @@ def generate_pseudo_labels(config: Config) -> Path:
         embeddings=tensors["embeddings"][idx],
         classifier_weight=tensors["classifier_weight"],
         class_ids=tensors["class_ids"][idx],
-        delta=config.pseudo_delta,
         beta=config.pseudo_beta,
         gamma=config.pseudo_gamma,
         qv=qv,

@@ -33,18 +33,15 @@ def _resolve_class_name(folder: str, mode: str) -> str:
     return folder.rsplit("_", maxsplit=1)[0] if mode == "merge_person" else folder
 
 
-def _assign_split(items: list[Path], ratios: tuple[float, float, float]) -> list[str]:
-    tr, vr, _ = ratios
-    n = len(items)
-    if n < 3:
-        return ["train"] * n
-    tc, vc = max(1, int(n * tr)), max(1, int(n * vr))
-    rest = n - tc - vc
-    splits = ["train"] * tc + ["val"] * vc + ["test"] * max(0, rest)
-    return splits[:n]
-
-
 def build_metadata(config: Config) -> pd.DataFrame:
+    """Build metadata with class-disjoint split (PGRG Sec.IV-B).
+
+    Classes are partitioned into three groups:
+      - recognition dataset: for ArcFace training, internally split train/val
+      - IQA dataset: for pseudo-labels + IQA training, internally split train/val
+      - test dataset: held out for final evaluation
+    No identity appears in more than one group.
+    """
     root = Path(config.data_root)
     if not root.exists():
         raise FileNotFoundError(f"Dataset not found: {root}")
@@ -55,60 +52,33 @@ def build_metadata(config: Config) -> pd.DataFrame:
     classes = sorted({_resolve_class_name(f, config.identity_mode) for f in grouped})
     c2id = {c: i for i, c in enumerate(classes)}
     rng = check_random_state(config.seed)
-    recs = []
 
-    if config.split_mode == "class":
-        return _build_metadata_class_split(grouped, classes, c2id, rng, config)
-
-    for folder, paths in sorted(grouped.items()):
-        rng.shuffle(paths)
-        splits = _assign_split(
-            paths, (config.train_ratio, config.val_ratio, config.test_ratio)
-        )
-        cn = _resolve_class_name(folder, config.identity_mode)
-        pid, hs = folder.rsplit("_", maxsplit=1)
-        for img, sp in zip(paths, splits):
-            recs.append(
-                ImageRecord(
-                    str(img),
-                    f"{folder}/{img.stem}",
-                    folder,
-                    pid,
-                    pid,
-                    hs,
-                    cn,
-                    c2id[cn],
-                    sp,
-                )
-            )
-    df = pd.DataFrame(recs)
-    save_csv(df, config.metadata_path)
-    return df
+    return _build_metadata_class_split(grouped, classes, c2id, rng, config)
 
 
 def _build_metadata_class_split(
     grouped: dict[str, list[Path]],
     classes: list[str],
     c2id: dict[str, int],
-    rng: np.random.RandomState,  # type: ignore[type-arg]
+    rng: np.random.RandomState,
     config: Config,
 ) -> pd.DataFrame:
-    """Class-disjoint split: recog / quality / test (PGRG Sec.IV-B).
+    """PGRG class-disjoint split: recognition / IQA / test (Sec.IV-B).
 
-    Classes (identities) are partitioned into up to three groups:
-      - recog classes: for ArcFace recognizer training (if ratio > 0)
-      - quality classes: split into IQA train/val by sample
-      - test classes: held out entirely for final EER/AOC evaluation
-    No class appears in more than one group.
+    recognition dataset → split into train/val internally
+    IQA dataset         → split into train/val internally
+    test dataset        → held out for final evaluation
+    No identity appears in more than one group.
     """
     class_ids = list(range(len(classes)))
     rng.shuffle(class_ids)
 
-    n_recog = int(len(classes) * config.class_split_recog_ratio)
-    n_quality = int(len(classes) * config.class_split_quality_ratio)
+    n_recognition = int(len(classes) * config.class_recognition_ratio)
+    n_iqa = int(len(classes) * config.class_iqa_ratio)
 
-    recog_classes = set(class_ids[:n_recog]) if n_recog > 0 else set()
-    test_classes = set(class_ids[n_recog + n_quality :])
+    recognition_classes = set(class_ids[:n_recognition]) if n_recognition > 0 else set()
+    iqa_classes = set(class_ids[n_recognition : n_recognition + n_iqa])
+    test_classes = set(class_ids[n_recognition + n_iqa :])
 
     recs = []
     for folder, paths in sorted(grouped.items()):
@@ -131,22 +101,7 @@ def _build_metadata_class_split(
                         "test",
                     )
                 )
-        elif cid in recog_classes:
-            for img in paths:
-                recs.append(
-                    ImageRecord(
-                        str(img),
-                        f"{folder}/{img.stem}",
-                        folder,
-                        pid,
-                        pid,
-                        hs,
-                        cn,
-                        cid,
-                        "recog",
-                    )
-                )
-        else:
+        elif cid in recognition_classes or cid in iqa_classes:
             shuffled = list(paths)
             rng.shuffle(shuffled)
             n_train = max(1, int(len(shuffled) * 0.8))
