@@ -1,5 +1,7 @@
 """Evaluation utilities for PV-IQA: inference, metrics, and quality analysis."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
@@ -13,9 +15,19 @@ from pv_iqa.config import Config
 from pv_iqa.models import PalmVeinIQARegressor, PalmVeinRecognizer
 from pv_iqa.utils.common import ensure_dir, resolve_device, save_csv, to_device
 from pv_iqa.utils.datasets import PalmVeinDataset, create_dataloader, load_metadata
+from pv_iqa.utils.logging import ExperimentLogger
 from pv_iqa.utils.transforms import build_transforms
 
 EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+
+
+def _log(logger: ExperimentLogger | None, msg: str) -> None:
+    """Write to logger if available, fall back to print."""
+    if logger is not None:
+        logger.info(msg)
+    else:
+        print(msg)
+
 
 # ---------------------------------------------------------------------------
 # Inference
@@ -23,12 +35,14 @@ EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 
 def load_checkpoint(
-    config: Config, path: str | Path,
+    config: Config,
+    path: str | Path,
 ) -> tuple[PalmVeinIQARegressor, torch.device]:
     dev = resolve_device(config.device)
     ckpt = torch.load(path, map_location=dev, weights_only=False)
     m = PalmVeinIQARegressor(
-        ckpt.get("backbone", config.iqa_backbone), pretrained=False,
+        ckpt.get("backbone", config.iqa_backbone),
+        pretrained=False,
     ).to(dev)
     m.load_state_dict(ckpt["model_state"])
     m.eval()
@@ -64,31 +78,47 @@ def score_folder(config: Config, ckpt: str | Path, folder: str | Path) -> list[d
 
 
 def predict_quality_scores(
-    config: Config, ckpt: str | Path, split: str,
+    config: Config,
+    ckpt: str | Path,
+    split: str,
 ) -> pd.DataFrame:
     meta = load_metadata(config)
     model, dev = load_checkpoint(config, ckpt)
     ds = PalmVeinDataset(
-        meta, split=split, image_size=config.image_size,
-        target_kind="none", is_train=False,
+        meta,
+        split=split,
+        image_size=config.image_size,
+        target_kind="none",
+        is_train=False,
         grayscale_to_rgb=config.grayscale_to_rgb,
     )
     loader = create_dataloader(
-        ds, batch_size=config.eval_batch_size,
-        num_workers=config.num_workers, shuffle=False,
+        ds,
+        batch_size=config.eval_batch_size,
+        num_workers=config.num_workers,
+        shuffle=False,
     )
     recs = []
     with torch.no_grad():
         for b in tqdm(loader, desc="predict", leave=False):
             b = to_device(b, dev)
             scores = model(b["image"])
-            for sid, cid, s in zip(b["sample_id"], b["class_id"], scores.cpu().tolist()):
-                recs.append({
-                    "sample_id": sid, "class_id": int(cid),
-                    "predicted_quality": float(s), "split": split,
-                })
+            for sid, cid, s in zip(
+                b["sample_id"], b["class_id"], scores.cpu().tolist()
+            ):
+                recs.append(
+                    {
+                        "sample_id": sid,
+                        "class_id": int(cid),
+                        "predicted_quality": float(s),
+                        "split": split,
+                    }
+                )
     df = pd.DataFrame(recs)
-    save_csv(df, ensure_dir(config.experiment_dir / "evaluation") / f"{split}_predictions.csv")
+    save_csv(
+        df,
+        ensure_dir(config.experiment_dir / "evaluation") / f"{split}_predictions.csv",
+    )
     return df
 
 
@@ -96,8 +126,10 @@ def predict_quality_scores(
 # err_roi evaluation
 # ---------------------------------------------------------------------------
 
-def parse_err_roi_labels(err_roi_dir: str = "datasets/err_roi",
-                          desc_path: str = "datasets/err_roi描述.txt") -> dict[str, int]:
+
+def parse_err_roi_labels(
+    err_roi_dir: str = "datasets/err_roi", desc_path: str = "datasets/err_roi描述txt"
+) -> dict[str, int]:
     """Returns {filename_stem: 1} for high-quality, 0 for low-quality images."""
     text = Path(desc_path).read_text(encoding="utf-8")
     line2 = text.strip().split("\n")[1]
@@ -120,7 +152,11 @@ def parse_err_roi_labels(err_roi_dir: str = "datasets/err_roi",
     return labels
 
 
-def evaluate_err_roi(config: Config, ckpt_path: str | Path) -> dict:
+def evaluate_err_roi(
+    config: Config,
+    ckpt_path: str | Path,
+    logger: ExperimentLogger | None = None,
+) -> dict:
     """Score err_roi images and compute AUC / ScoreGap / Overlap."""
     labels_map = parse_err_roi_labels()
     model, dev = load_checkpoint(config, ckpt_path)
@@ -158,11 +194,12 @@ def evaluate_err_roi(config: Config, ckpt_path: str | Path) -> dict:
     except ValueError:
         auc = 0.0
 
-    print(
+    msg = (
         f"  err_roi | AUC={auc:.4f}  Gap={score_gap:.2f}  "
         f"Overlap={overlap:.3f}  High={high_scores.mean():.1f}  "
         f"Low={low_scores.mean():.1f}"
     )
+    _log(logger, msg)
 
     return {
         "err_roi_auc": auc,
@@ -177,10 +214,12 @@ def evaluate_err_roi(config: Config, ckpt_path: str | Path) -> dict:
 # EER / AOC evaluation (PGRG Sec.IV-C)
 # ---------------------------------------------------------------------------
 
+
 def evaluate_eer_aoc(
     config: Config,
     iqa_ckpt: str | Path,
     recog_run: str = "auto",
+    logger: ExperimentLogger | None = None,
 ) -> dict:
     """EER at rejection rates 0%, 5%, …, 30% on class-disjoint test split.
 
@@ -189,12 +228,13 @@ def evaluate_eer_aoc(
     meta = load_metadata(config)
     test_meta = meta[meta["split"] == "test"]
     if len(test_meta) == 0:
-        print("  ⚠ No test split found")
+        _log(logger, "  ⚠ No test split found")
         return {}
 
-    print(
+    _log(
+        logger,
         f"\n  --- EER/AOC (test: {test_meta['class_id'].nunique()} unseen classes, "
-        f"{len(test_meta)} images) ---"
+        f"{len(test_meta)} images) ---",
     )
 
     dev = resolve_device(config.device)
@@ -206,23 +246,34 @@ def evaluate_eer_aoc(
         recog_dir = recog_dir / config.name / "recognizer"
     else:
         recog_dir = recog_dir / recog_run / "recognizer"
-    recog_ckpt = torch.load(str(recog_dir / "best.pt"), map_location=dev, weights_only=False)
+    recog_ckpt = torch.load(
+        str(recog_dir / "best.pt"), map_location=dev, weights_only=False
+    )
     recog = PalmVeinRecognizer(
-        config.recog_backbone, int(meta["class_id"].nunique()),
-        config.recog_embedding_dim, config.recog_dropout,
-        config.recog_margin, config.recog_scale, pretrained=False,
+        config.recog_backbone,
+        int(meta["class_id"].nunique()),
+        config.recog_embedding_dim,
+        config.recog_dropout,
+        config.recog_margin,
+        config.recog_scale,
+        pretrained=False,
     ).to(dev)
     recog.load_state_dict(recog_ckpt["model_state"])
     recog.eval()
 
     ds = PalmVeinDataset(
-        meta, split="test", image_size=config.image_size,
-        target_kind="none", is_train=False,
+        meta,
+        split="test",
+        image_size=config.image_size,
+        target_kind="none",
+        is_train=False,
         grayscale_to_rgb=config.grayscale_to_rgb,
     )
     loader = create_dataloader(
-        ds, batch_size=config.eval_batch_size,
-        num_workers=config.num_workers, shuffle=False,
+        ds,
+        batch_size=config.eval_batch_size,
+        num_workers=config.num_workers,
+        shuffle=False,
     )
 
     recs = []
@@ -232,63 +283,75 @@ def evaluate_eer_aoc(
             quality = iqa_model(b["image"])
             emb, _ = recog(b["image"])
             for i in range(len(b["sample_id"])):
-                recs.append({
-                    "sample_id": b["sample_id"][i],
-                    "class_id": int(b["class_id"][i]),
-                    "quality": float(quality[i]),
-                    "embedding": emb[i].cpu().numpy(),
-                })
+                recs.append(
+                    {
+                        "sample_id": b["sample_id"][i],
+                        "class_id": int(b["class_id"][i]),
+                        "quality": float(quality[i]),
+                        "embedding": emb[i].cpu().numpy(),
+                    }
+                )
 
-    df = pd.DataFrame(recs).sort_values("quality", ascending=True)
+    df = pd.DataFrame(recs)
+    if config.eval_sample_size > 0 and len(df) > config.eval_sample_size:
+        rng = np.random.default_rng(42)
+        df = df.iloc[rng.choice(len(df), config.eval_sample_size, replace=False)]
+    df = df.sort_values("quality", ascending=True)
     total = len(df)
+
+    all_embs = np.stack(df["embedding"].values).astype(np.float32)
+    norms = np.linalg.norm(all_embs, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    all_embs /= norms
+    all_ids = df["class_id"].values
 
     rejection_rates = [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
     eer_values = []
 
-    print("  reject% | EER%")
+    _log(logger, "  reject% | EER%")
     for rr in rejection_rates:
         keep_n = max(3, int(total * (1 - rr)))
-        keep_df = df.tail(keep_n)
+        embs = all_embs[-keep_n:]
+        ids = all_ids[-keep_n:]
+        N = len(embs)
 
-        embs = np.stack(keep_df["embedding"].values)
-        class_ids = keep_df["class_id"].values
-        N = len(keep_df)
+        # BLAS matrix multiply replaces O(N²) Python loop
+        sim = embs @ embs.T
 
-        genuine, impostor = [], []
-        for i in range(N):
-            for j in range(i + 1, N):
-                sim = float(np.dot(embs[i], embs[j]))
-                if class_ids[i] == class_ids[j]:
-                    genuine.append(sim)
-                else:
-                    impostor.append(sim)
+        iu, ju = np.triu_indices(N, k=1)
+        pair_sim = sim[iu, ju]
+        same_class = ids[iu] == ids[ju]
+
+        genuine = pair_sim[same_class]
+        impostor = pair_sim[~same_class]
 
         if len(genuine) == 0 or len(impostor) == 0:
             eer_values.append(float("nan"))
             continue
 
-        genuine_arr = np.array(genuine)
-        impostor_arr = np.array(impostor)
         thresholds = np.linspace(
-            min(genuine_arr.min(), impostor_arr.min()),
-            max(genuine_arr.max(), impostor_arr.max()), 1000,
+            min(genuine.min(), impostor.min()),
+            max(genuine.max(), impostor.max()),
+            1000,
         )
 
         best_eer = 1.0
         for t in thresholds:
-            far = (impostor_arr >= t).mean()
-            frr = (genuine_arr < t).mean()
+            far = (impostor >= t).mean()
+            frr = (genuine < t).mean()
             best_eer = min(best_eer, (far + frr) / 2.0)
         eer_values.append(best_eer)
-        print(f"  {rr:6.0%} | {best_eer * 100:.4f}")
+        _log(logger, f"  {rr:6.0%} | {best_eer * 100:.4f}")
 
     aoc = 0.0
     for i in range(len(rejection_rates) - 1):
         if not np.isnan(eer_values[i]) and not np.isnan(eer_values[i + 1]):
-            aoc += (eer_values[i] + eer_values[i + 1]) / 2.0 * (
-                rejection_rates[i + 1] - rejection_rates[i]
+            aoc += (
+                (eer_values[i] + eer_values[i + 1])
+                / 2.0
+                * (rejection_rates[i + 1] - rejection_rates[i])
             )
-    print(f"  AOC = {aoc:.4f}")
+    _log(logger, f"  AOC = {aoc:.4f}")
 
     results = {"eer_aoc": float(aoc)}
     for rr, eer in zip(rejection_rates, eer_values):
@@ -301,14 +364,17 @@ def evaluate_eer_aoc(
 # Rejection accuracy
 # ---------------------------------------------------------------------------
 
+
 def evaluate_rejection_accuracy(
     config: Config,
     iqa_ckpt: str | Path,
     recog_run: str = "auto",
+    logger: ExperimentLogger | None = None,
 ) -> dict:
-    """Reject worst N% → measure recognition accuracy on remaining.
+    """Rank-1 identification accuracy after rejecting worst N% by quality.
 
-    Standard biometric IQA metric (PGRG / CR-FIQA / SDD-FIQA).
+    Uses embedding cosine similarity instead of classifier logits,
+    so it works with open-set test splits where class IDs are unseen.
     """
     meta = load_metadata(config)
     dev = resolve_device(config.device)
@@ -319,52 +385,81 @@ def evaluate_rejection_accuracy(
         recog_dir = recog_dir / config.name / "recognizer"
     else:
         recog_dir = recog_dir / recog_run / "recognizer"
-    recog_ckpt = torch.load(str(recog_dir / "best.pt"), map_location=dev, weights_only=False)
+    recog_ckpt = torch.load(
+        str(recog_dir / "best.pt"), map_location=dev, weights_only=False
+    )
     recog = PalmVeinRecognizer(
-        config.recog_backbone, int(meta["class_id"].nunique()),
-        config.recog_embedding_dim, config.recog_dropout,
-        config.recog_margin, config.recog_scale, pretrained=False,
+        config.recog_backbone,
+        int(meta["class_id"].nunique()),
+        config.recog_embedding_dim,
+        config.recog_dropout,
+        config.recog_margin,
+        config.recog_scale,
+        pretrained=False,
     ).to(dev)
     recog.load_state_dict(recog_ckpt["model_state"])
     recog.eval()
 
     ds = PalmVeinDataset(
-        meta, split="test", image_size=config.image_size,
-        target_kind="none", is_train=False,
+        meta,
+        split="test",
+        image_size=config.image_size,
+        target_kind="none",
+        is_train=False,
         grayscale_to_rgb=config.grayscale_to_rgb,
     )
     loader = create_dataloader(
-        ds, batch_size=config.eval_batch_size,
-        num_workers=config.num_workers, shuffle=False,
+        ds,
+        batch_size=config.eval_batch_size,
+        num_workers=config.num_workers,
+        shuffle=False,
     )
 
-    recs = []
+    all_embs, all_ids, all_scores = [], [], []
     with torch.no_grad():
         for b in loader:
             b = to_device(b, dev)
             scores = iqa_model(b["image"])
-            _, logits = recog(b["image"])
-            preds = logits.argmax(dim=1)
-            for sid, cid, s, p in zip(
-                b["sample_id"], b["class_id"],
-                scores.cpu().tolist(), preds.cpu().tolist(),
-            ):
-                recs.append({
-                    "sample_id": sid, "class_id": int(cid),
-                    "quality": float(s), "predicted_class": p,
-                })
+            emb, _ = recog(b["image"])
+            all_embs.append(emb.cpu().numpy())
+            all_ids.extend(b["class_id"].cpu().tolist())
+            all_scores.extend(scores.cpu().tolist())
 
-    df = pd.DataFrame(recs).sort_values("quality", ascending=True)
-    total = len(df)
+    embeddings = np.concatenate(all_embs, axis=0).astype(np.float32)
+    class_ids = np.array(all_ids)
+    qualities = np.array(all_scores)
+
+    if config.eval_sample_size > 0 and len(embeddings) > config.eval_sample_size:
+        rng = np.random.default_rng(42)
+        idx = rng.choice(len(embeddings), config.eval_sample_size, replace=False)
+        embeddings = embeddings[idx]
+        class_ids = class_ids[idx]
+        qualities = qualities[idx]
+
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    embeddings /= norms
+
+    sort_idx = np.argsort(qualities)
+    total = len(qualities)
 
     results = {}
-    print("\n  --- Rejection Accuracy ---")
+    _log(logger, "\n  --- Rejection Accuracy (rank-1) ---")
     for reject_rate in [0.0, 0.1, 0.2, 0.3]:
         keep_n = max(1, int(total * (1 - reject_rate)))
-        keep_df = df.tail(keep_n)
-        acc = (keep_df["class_id"] == keep_df["predicted_class"]).mean()
+        keep_idx = sort_idx[-keep_n:]
+        keep_emb = embeddings[keep_idx]
+        keep_ids = class_ids[keep_idx]
+
+        sim = keep_emb @ keep_emb.T
+        np.fill_diagonal(sim, -np.inf)
+        best = np.argmax(sim, axis=1)
+        acc = float((keep_ids[best] == keep_ids).mean())
         results[f"acc@{1 - reject_rate:.0%}"] = float(acc)
-        print(f"  reject {reject_rate:.0%} → keep {keep_n}/{total} → acc={acc:.4f}")
+        _log(
+            logger,
+            f"  reject {reject_rate:.0%} → keep {keep_n}/{total} → acc={acc:.4f}",
+        )
 
     return results
 
@@ -373,17 +468,25 @@ def evaluate_rejection_accuracy(
 # Full evaluation pipeline
 # ---------------------------------------------------------------------------
 
-def run_evaluation(config: Config, iqa_ckpt: str | Path) -> dict:
+
+def run_evaluation(
+    config: Config,
+    iqa_ckpt: str | Path,
+    logger: ExperimentLogger | None = None,
+) -> dict:
     """Run all evaluation metrics and return aggregated results."""
     results = {}
 
-    r = evaluate_err_roi(config, iqa_ckpt)
+    _log(logger, "\n========== Evaluation ==========")
+
+    r = evaluate_err_roi(config, iqa_ckpt, logger=logger)
     results.update(r)
 
-    r = evaluate_eer_aoc(config, iqa_ckpt)
+    r = evaluate_eer_aoc(config, iqa_ckpt, logger=logger)
     results.update(r)
 
-    r = evaluate_rejection_accuracy(config, iqa_ckpt)
+    r = evaluate_rejection_accuracy(config, iqa_ckpt, logger=logger)
     results.update(r)
 
+    _log(logger, f"\nResults: {results}")
     return results

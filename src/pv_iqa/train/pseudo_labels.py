@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import cv2
 import numpy as np
 import pandas as pd
 import torch
@@ -35,44 +34,10 @@ def _get_degrade_factor(sample_id: str) -> float:
     return 0.0
 
 
-def compute_visual_quality(
-    image_paths: list[str], weights: tuple[float, float, float] = (1.0, 1.0, 1.0)
-) -> np.ndarray:
-    """Compute per-image visual quality Q^V from raw pixels.
-
-    Three sub-metrics, each normalized to [0, 1]:
-      - Laplacian variance (sharpness)
-      - RMS contrast (std dev / 128)
-      - Exposure balance (1 − |mean − 128| / 128)
-
-    Returns (N,) float32 array where higher = better visual quality.
-    """
-    w_sum = sum(weights)
-    qv = np.zeros(len(image_paths), dtype=np.float32)
-    for i, p in enumerate(tqdm(image_paths, desc="qv", leave=False)):
-        img = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            continue
-        img_f = img.astype(np.float32)
-
-        laplacian_var = cv2.Laplacian(img, cv2.CV_64F).var()
-        sharpness = np.clip(laplacian_var / 500.0, 0.0, 1.0)
-
-        rms_contrast = np.clip(np.std(img_f) / 128.0, 0.0, 1.0)
-
-        mean_val = np.mean(img_f)
-        exposure = 1.0 - abs(mean_val - 128.0) / 128.0
-
-        qv[i] = (
-            weights[0] * sharpness + weights[1] * rms_contrast + weights[2] * exposure
-        ) / w_sum
-    return qv
-
-
 # ---------------------------------------------------------------------------
 # Core pseudo-label computation
-#   Q = 100 × minmax( δ·Q^P_norm + β·WD_norm + γ·Q^V_norm )
-# Components: PGRG (Q^P) + SDD-FIQA (WD) + Visual Quality (Q^V)
+#   Q = 100 × minmax( Q^P + β·WD − λ·degrade )
+# Components: PGRG (Q^P) + SDD-FIQA (WD) + degradation penalty
 # ---------------------------------------------------------------------------
 
 
@@ -82,25 +47,20 @@ def compute_pseudo_labels(
     class_ids: torch.Tensor,
     *,
     beta: float = 0.0,
-    gamma: float = 0.0,
-    qv: np.ndarray | None = None,
 ) -> np.ndarray:
-    """3-component pseudo-label fusion for unsupervised palm vein IQA.
+    """2-component pseudo-label fusion for unsupervised palm vein IQA.
 
-        Q = 100 × minmax( δ·minmax(Q^P) + β·minmax(WD) + γ·minmax(Q^V) )
+        Q = 100 × minmax( Q^P + β·WD − λ·degrade )
 
     Components (per-sample i):
       Q^P_i = mean(cos(e_i, e_j))  ∀j: class[j]=class[i], j≠i  (PGRG Eq.2)
       WD_i  = Wasserstein(S^P_i, top-k S^N_i)                  (SDD-FIQA)
-      Q^V_i = (sharpness + contrast + exposure_balance) / 3    (pixel-based)
 
     Args:
         embeddings: (N, D) L2-normalized feature vectors.
         classifier_weight: (C, D) ArcFace classifier weight vectors.
         class_ids: (N,) integer class labels.
         beta: WD weight (default 0.0, 0 = disable).
-        gamma: Q^V weight (default 0.0, 0 = disable).
-        qv: pre-computed visual quality scores (N,), optional.
 
     Returns:
         (N,) float32 array of quality scores in [0, 100].
@@ -142,9 +102,8 @@ def compute_pseudo_labels(
             qwd[i] = float(wasserstein_distance(s_pos, top_neg))
 
     # -- Weighted fusion → unified minmax → [0, 100] ---------------------------
-    #   Q = 100 × minmax( Q^P + β·WD + γ·Q^V )   (PGRG Eq.5, with added Q^V)
-    qv_term = gamma * qv if (gamma > 0 and qv is not None) else 0.0
-    blended = qp + beta * qwd + qv_term
+    #   Q = 100 × minmax( Q^P + β·WD )   (PGRG Eq.5)
+    blended = qp + beta * qwd
     scores = 100.0 * minmax_scale(blended)
     return scores.astype(np.float32)
 
@@ -156,10 +115,9 @@ def compute_pseudo_labels(
 # Flow:
 #   1. Load pre-computed recognition features (safetensors)
 #   2. Filter by split (class-disjoint: exclude test classes)
-#   3. Optionally compute Q^V from raw images (if gamma > 0)
-#   4. Compute 3-component pseudo-labels via weighted fusion
-#   5. Apply degradation penalty to known low-quality images
-#   6. Attach pseudo-labels to metadata for downstream IQA training
+#   3. Compute 2-component pseudo-labels via weighted fusion
+#   4. Apply degradation penalty to known low-quality images
+#   5. Attach pseudo-labels to metadata for downstream IQA training
 # ---------------------------------------------------------------------------
 
 
@@ -181,32 +139,11 @@ def generate_pseudo_labels(config: Config) -> Path:
         idx = meta[~meta["sample_id"].isin(test_sids)].index.to_numpy()
     subset = meta.iloc[idx].reset_index(drop=True)
 
-    qv = None
-    if config.pseudo_gamma > 0:
-        full_meta = pd.read_csv(config.metadata_path)
-        sid_to_path = dict(zip(full_meta["sample_id"], full_meta["image_path"]))
-        # Only include sample_ids present in the current metadata
-        valid_mask = subset["sample_id"].isin(sid_to_path.keys())
-        if not valid_mask.all():
-            subset = subset[valid_mask].reset_index(drop=True)
-            idx = idx[valid_mask.to_numpy()]
-        image_paths = [sid_to_path[sid] for sid in subset["sample_id"]]
-        w_str = config.pseudo_qv_weights
-        w_parts = [float(x.strip()) for x in w_str.split(",")]
-        qv_weights = (
-            (w_parts[0], w_parts[1], w_parts[2])
-            if len(w_parts) >= 3
-            else (1.0, 1.0, 1.0)
-        )
-        qv = compute_visual_quality(image_paths, weights=qv_weights)
-
     scores = compute_pseudo_labels(
         embeddings=tensors["embeddings"][idx].clone(),
         classifier_weight=tensors["classifier_weight"].clone(),
         class_ids=tensors["class_ids"][idx].clone(),
         beta=config.pseudo_beta,
-        gamma=config.pseudo_gamma,
-        qv=qv,
     )
 
     pseudo_df = pd.DataFrame(

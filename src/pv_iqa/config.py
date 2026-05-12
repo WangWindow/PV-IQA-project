@@ -42,22 +42,20 @@ class Config:
     recog_warmup_epochs: int = 1            # 识别器学习率预热轮数
 
     # -- 伪标签生成 --------------------------------------------------------------
-    # 公式: Q = 100 × minmax( Q^P + β·WD + γ·Q^V )   (先融合，后统一 minmax)
-    #   Q^P: 类内余弦相似度期望 (PGRG, Zou et al. IEEE TIM 2023, Eq.2)
-    #   WD:  Wasserstein 距离 (SDD-FIQA, Ou et al. CVPR 2021, Eq.4)
-    #       取 interclass 相似度前 n 个最大值，n = intraclass 样本数
-    #   Q^V: 视觉质量 = (清晰度 + 对比度 + 曝光平衡) / 3
+    # 公式: Q = 100 × minmax( Q^P + β·WD − λ·degrade )
+    #   Q^P:   类内余弦相似度期望 (PGRG, Zou et al. IEEE TIM 2023, Eq.2)
+    #   WD:    Wasserstein 距离 (SDD-FIQA, Ou et al. CVPR 2021, Eq.4)
+    #          取 interclass 相似度前 n 个最大值，n = intraclass 样本数
+    #   degrade: 退化类型惩罚 (根据样本 ID 关键词判定)
     pseudo_split: str = "all"               # 伪标签计算所用 split
     pseudo_delta: float = 1.0               # Q^P 权重
-    pseudo_beta: float = 0.5                # WD 权重
-    pseudo_gamma: float = 0.5               # Q^V 权重
-    pseudo_qv_weights: str = "1,1,1"        # Q^V 子指标权重 (清晰度,对比度,曝光)
-    pseudo_degrade_penalty: float = 0.5     # 退化惩罚系数 (0.5=减半)
+    pseudo_beta: float = 1.0                # WD 权重
+    pseudo_degrade_penalty: float = 0.2     # 退化惩罚系数 (0=禁用))
 
     # -- IQA 回归模型 -------------------------------------------------------------
     iqa_backbone: str = "mobilenetv3_large_100"
     iqa_pretrained: bool = True             # 是否加载 ImageNet 预训练权重
-    iqa_epochs: int = 40                    # IQA 训练轮数
+    iqa_epochs: int = 30                    # IQA 训练轮数
     iqa_lr: float = 2e-4                    # IQA 学习率
     iqa_wd: float = 5e-5                    # IQA 权重衰减
     iqa_warmup_epochs: int = 2              # IQA 学习率预热轮数
@@ -74,6 +72,7 @@ class Config:
     )
     eval_far_targets: list[float] = field(default_factory=lambda: [1e-2, 1e-3, 1e-4])
     eval_max_impostor_pairs: int = 20000
+    eval_sample_size: int = 2000            # EER/rank-1 随机抽样数量 (0=全部)
 
     @property
     def experiment_dir(self) -> Path:
