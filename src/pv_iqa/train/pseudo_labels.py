@@ -11,33 +11,22 @@ from tqdm.auto import tqdm
 from pv_iqa.config import Config
 from pv_iqa.utils.common import ensure_dir
 
-# ---------------------------------------------------------------------------
-# Degradation-aware penalty
-# Multipliers encode per-type severity: overexposed/underexposed = severe,
-# incomplete = moderate, enhanced_extreme = mild.
-# Applied in generate_pseudo_labels when pseudo_degrade_penalty > 0.
-# ---------------------------------------------------------------------------
-DEGRADE_KEYWORDS = ["enhanced_extreme", "overexposed", "underexposed", "incomplete"]
-
-_DEGRADE_TYPE_MULTIPLIER = {
-    "enhanced_extreme": 0.2,
-    "incomplete": 0.7,
-    "overexposed": 1.0,
-    "underexposed": 1.0,
-}
+# Degradation type labels (sorted by severity)
+DEGRADE_KEYWORDS = ["enhanced_extreme", "incomplete", "overexposed", "underexposed"]
 
 
-def _get_degrade_factor(sample_id: str) -> float:
-    for kw, mult in _DEGRADE_TYPE_MULTIPLIER.items():
+def get_degrade_type(sample_id: str) -> int:
+    for i, kw in enumerate(DEGRADE_KEYWORDS, 1):
         if kw in sample_id:
-            return mult
-    return 0.0
+            return i
+    return 0
 
 
 # ---------------------------------------------------------------------------
 # Core pseudo-label computation
-#   Q = 100 × minmax( Q^P + β·WD − λ·degrade )
-# Components: PGRG (Q^P) + SDD-FIQA (WD) + degradation penalty
+#   Q_raw = 100 × minmax( Q^P + β·WD )
+# Components: PGRG (Q^P) + SDD-FIQA (WD)
+# Degradation penalty is learned during IQA training, not applied here.
 # ---------------------------------------------------------------------------
 
 
@@ -50,11 +39,14 @@ def compute_pseudo_labels(
 ) -> np.ndarray:
     """2-component pseudo-label fusion for unsupervised palm vein IQA.
 
-        Q = 100 × minmax( Q^P + β·WD − λ·degrade )
+        Q_raw = 100 × minmax( Q^P + β·WD )
 
     Components (per-sample i):
       Q^P_i = mean(cos(e_i, e_j))  ∀j: class[j]=class[i], j≠i  (PGRG Eq.2)
       WD_i  = Wasserstein(S^P_i, top-k S^N_i)                  (SDD-FIQA)
+
+    Degradation penalty is NOT applied here; per-type correction is
+    learned as a bias during IQA training.
 
     Args:
         embeddings: (N, D) L2-normalized feature vectors.
@@ -115,8 +107,8 @@ def compute_pseudo_labels(
 # Flow:
 #   1. Load pre-computed recognition features (safetensors)
 #   2. Filter by split (class-disjoint: exclude test classes)
-#   3. Compute 2-component pseudo-labels via weighted fusion
-#   4. Apply degradation penalty to known low-quality images
+#   3. Compute 2-component pseudo-labels (Q^P + β·WD)
+#   4. Record degradation type per sample (for learnable bias)
 #   5. Attach pseudo-labels to metadata for downstream IQA training
 # ---------------------------------------------------------------------------
 
@@ -153,18 +145,17 @@ def generate_pseudo_labels(config: Config) -> Path:
         }
     )
 
-    # Apply degradation penalty: multiply score by (1 - penalty) for known degraded images
-    if config.pseudo_degrade_penalty > 0:
-        factors = pseudo_df["sample_id"].apply(_get_degrade_factor)
-        n_degraded = (factors > 0).sum()
-        if n_degraded > 0:
-            effective_penalty = config.pseudo_degrade_penalty * factors
-            pseudo_df["quality_score"] *= 1.0 - effective_penalty
+    # Record degradation type for learnable bias during IQA training
+    pseudo_df["degrade_type"] = pseudo_df["sample_id"].apply(get_degrade_type)
 
     # Attach to metadata — use merge to handle potential duplicate sample_ids safely
     full_meta = pd.read_csv(config.metadata_path)
     quality_map = pseudo_df.set_index("sample_id")["quality_score"]
+    degrade_map = pseudo_df.set_index("sample_id")["degrade_type"]
     full_meta["quality_score"] = full_meta["sample_id"].map(quality_map)
+    full_meta["degrade_type"] = (
+        full_meta["sample_id"].map(degrade_map).fillna(0).astype(int)
+    )
     full_meta.to_csv(config.metadata_path, index=False)
 
     out = ensure_dir(config.experiment_dir / "pseudo_labels") / "pseudo_labels.csv"

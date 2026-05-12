@@ -35,22 +35,21 @@ def _log(logger: ExperimentLogger | None, msg: str) -> None:
 
 
 def load_checkpoint(
-    config: Config,
-    path: str | Path,
-) -> tuple[PalmVeinIQARegressor, torch.device]:
+    config: Config, path: str | Path,
+) -> tuple[PalmVeinIQARegressor, torch.device, list[float] | None]:
     dev = resolve_device(config.device)
     ckpt = torch.load(path, map_location=dev, weights_only=False)
     m = PalmVeinIQARegressor(
-        ckpt.get("backbone", config.iqa_backbone),
-        pretrained=False,
+        ckpt.get("backbone", config.iqa_backbone), pretrained=False,
     ).to(dev)
     m.load_state_dict(ckpt["model_state"])
     m.eval()
-    return m, dev
+    biases = ckpt.get("degrade_scales", ckpt.get("degrade_biases", None))
+    return m, dev, biases
 
 
 def score_image(config: Config, ckpt: str | Path, img_path: str | Path) -> dict:
-    m, dev = load_checkpoint(config, ckpt)
+    m, dev, _ = load_checkpoint(config, ckpt)
     t = build_transforms(image_size=config.image_size, is_train=False)
     img = Image.open(img_path).convert("L")
     if config.grayscale_to_rgb:
@@ -62,7 +61,7 @@ def score_image(config: Config, ckpt: str | Path, img_path: str | Path) -> dict:
 
 
 def score_folder(config: Config, ckpt: str | Path, folder: str | Path) -> list[dict]:
-    m, dev = load_checkpoint(config, ckpt)
+    m, dev, _ = load_checkpoint(config, ckpt)
     t = build_transforms(image_size=config.image_size, is_train=False)
     res = []
     for p in sorted(Path(folder).rglob("*")):
@@ -83,7 +82,7 @@ def predict_quality_scores(
     split: str,
 ) -> pd.DataFrame:
     meta = load_metadata(config)
-    model, dev = load_checkpoint(config, ckpt)
+    model, dev, _ = load_checkpoint(config, ckpt)
     ds = PalmVeinDataset(
         meta,
         split=split,
@@ -159,7 +158,7 @@ def evaluate_err_roi(
 ) -> dict:
     """Score err_roi images and compute AUC / ScoreGap / Overlap."""
     labels_map = parse_err_roi_labels()
-    model, dev = load_checkpoint(config, ckpt_path)
+    model, dev, _ = load_checkpoint(config, ckpt_path)
 
     transform = build_transforms(image_size=config.image_size, is_train=False)
     scores, gts = [], []
@@ -238,7 +237,8 @@ def evaluate_eer_aoc(
     )
 
     dev = resolve_device(config.device)
-    iqa_model, _ = load_checkpoint(config, iqa_ckpt)
+    iqa_model, _, biases = load_checkpoint(config, iqa_ckpt)
+    bias_tensor = torch.tensor(biases, device=dev) if biases is not None else None
 
     # Load recognizer for embedding extraction
     recog_dir = Path(config.output_root)
@@ -281,6 +281,10 @@ def evaluate_eer_aoc(
         for b in loader:
             b = to_device(b, dev)
             quality = iqa_model(b["image"])
+            if bias_tensor is not None and "degrade_type" in b:
+                max_penalty = 0.5
+                scale = -max_penalty * torch.sigmoid(bias_tensor[b["degrade_type"].long()])
+                quality = quality * (1.0 + scale)
             emb, _ = recog(b["image"])
             for i in range(len(b["sample_id"])):
                 recs.append(
@@ -378,7 +382,8 @@ def evaluate_rejection_accuracy(
     """
     meta = load_metadata(config)
     dev = resolve_device(config.device)
-    iqa_model, _ = load_checkpoint(config, iqa_ckpt)
+    iqa_model, _, biases = load_checkpoint(config, iqa_ckpt)
+    bias_tensor = torch.tensor(biases, device=dev) if biases is not None else None
 
     recog_dir = Path(config.output_root)
     if recog_run == "auto":
@@ -420,6 +425,10 @@ def evaluate_rejection_accuracy(
         for b in loader:
             b = to_device(b, dev)
             scores = iqa_model(b["image"])
+            if bias_tensor is not None and "degrade_type" in b:
+                max_penalty = 0.5
+                scale = -max_penalty * torch.sigmoid(bias_tensor[b["degrade_type"].long()])
+                scores = scores * (1.0 + scale)
             emb, _ = recog(b["image"])
             all_embs.append(emb.cpu().numpy())
             all_ids.extend(b["class_id"].cpu().tolist())

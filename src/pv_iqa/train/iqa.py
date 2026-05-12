@@ -65,7 +65,17 @@ def train_iqa(config: Config) -> Path:
         config.iqa_backbone,
         pretrained=config.iqa_pretrained,
     ).to(device)
-    opt = AdamW(model.parameters(), lr=config.iqa_lr, weight_decay=config.iqa_wd)
+
+    degrade_raw = torch.nn.Parameter(
+        torch.tensor([0.0, -0.05, -0.18, -0.25, -0.25], device=device)
+    )
+    opt = AdamW(
+        [
+            {"params": model.parameters()},
+            {"params": [degrade_raw], "lr": config.iqa_lr * 50.0},
+        ],
+        lr=config.iqa_lr, weight_decay=config.iqa_wd,
+    )
 
     warmup = torch.optim.lr_scheduler.LinearLR(
         opt,
@@ -96,11 +106,15 @@ def train_iqa(config: Config) -> Path:
                 pred = model(batch["image"])
                 target = batch["target"].float()
 
+                if "degrade_type" in batch:
+                    dtypes = batch["degrade_type"].long()
+                    max_penalty = 0.5
+                    scale = -max_penalty * torch.sigmoid(degrade_raw[dtypes])
+                    pred = pred * (1.0 + scale)
+
                 l_huber = F.huber_loss(pred, target, delta=config.iqa_huber_delta)
 
-                # Label-based ranking loss (PGRG Eq.10-11):
-                #   L_rank = mean(ReLU(pred_j_norm - pred_i_norm))
-                #   for all pairs where (target_i - target_j) > min_rank_gap
+                # Label-based ranking loss (PGRG Eq.10-11)
                 t_i = target[:, None]
                 t_j = target[None, :]
                 pair_gap = t_i - t_j
@@ -132,13 +146,20 @@ def train_iqa(config: Config) -> Path:
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"iqa-val-{epoch}", leave=False):
                 batch = to_device(batch, device)
-                preds.extend(model(batch["image"]).cpu().tolist())
+                pred = model(batch["image"])
+                if "degrade_type" in batch:
+                    dtypes = batch["degrade_type"].long()
+                    max_penalty = 0.5
+                    scale = -max_penalty * torch.sigmoid(degrade_raw[dtypes])
+                    pred = pred * (1.0 + scale)
+                preds.extend(pred.cpu().tolist())
                 targets.extend(batch["target"].cpu().tolist())
 
         report = evaluate_regression(targets, preds)
         logger.info(
             f"Epoch {epoch:3d} | MAE={report.mae:.4f} "
-            f"RMSE={report.rmse:.4f} ρ={report.spearman:.3f}"
+            f"RMSE={report.rmse:.4f} ρ={report.spearman:.3f} "
+            f"deg={degrade_raw.tolist()}"
         )
 
         if report.mae < best_mae:
@@ -146,8 +167,9 @@ def train_iqa(config: Config) -> Path:
             torch.save(
                 {
                     "model_state": model.state_dict(),
-                    "backbone": config.iqa_backbone,
                     "best_mae": best_mae,
+                    "backbone": config.iqa_backbone,
+                    "degrade_scales": degrade_raw.tolist(),
                 },
                 best_path,
             )

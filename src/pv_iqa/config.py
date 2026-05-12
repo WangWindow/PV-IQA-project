@@ -50,7 +50,6 @@ class Config:
     pseudo_split: str = "all"               # 伪标签计算所用 split
     pseudo_delta: float = 1.0               # Q^P 权重
     pseudo_beta: float = 1.0                # WD 权重
-    pseudo_degrade_penalty: float = 0.2     # 退化惩罚系数 (0=禁用))
 
     # -- IQA 回归模型 -------------------------------------------------------------
     iqa_backbone: str = "mobilenetv3_large_100"

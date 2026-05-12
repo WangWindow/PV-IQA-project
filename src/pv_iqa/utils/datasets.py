@@ -16,6 +16,14 @@ from pv_iqa.utils.common import save_csv
 from pv_iqa.utils.transforms import build_transforms
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+DEGRADE_KEYWORDS = ["enhanced_extreme", "incomplete", "overexposed", "underexposed"]
+
+
+def _get_degrade_type(sample_id: str) -> int:
+    for i, kw in enumerate(DEGRADE_KEYWORDS, 1):
+        if kw in sample_id:
+            return i
+    return 0
 
 
 @dataclass(slots=True)
@@ -116,6 +124,7 @@ def build_metadata(config: Config) -> pd.DataFrame:
                 )
 
     df = pd.DataFrame(recs)
+    df["degrade_type"] = df["sample_id"].apply(_get_degrade_type)
     save_csv(df, config.metadata_path)
     return df
 
@@ -157,6 +166,7 @@ class PalmVeinDataset(Dataset):
             item["target"] = int(row["class_id"])
         elif self.target_kind == "quality_score":
             item["target"] = float(row["quality_score"])
+            item["degrade_type"] = int(row.get("degrade_type", 0))
         return item
 
 
