@@ -181,6 +181,7 @@ function PreviewStrip({
   onPreview: (image: PreviewImage) => void
 }) {
   const previewItems = results.slice(0, limit)
+  const allScores = results.map((r) => r.quality_score)
 
   if (!previewItems.length) {
     return null
@@ -213,7 +214,7 @@ function PreviewStrip({
             <div className="p-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-sm font-medium tabular-nums">{formatScore(result.quality_score)}</div>
-                <Badge variant="secondary">{qualityLabel(result.quality_score)}</Badge>
+                <Badge variant="secondary">{qualityLabel(result.quality_score, allScores)}</Badge>
               </div>
               <div className="mt-2 truncate text-sm text-muted-foreground">{result.relative_path}</div>
             </div>

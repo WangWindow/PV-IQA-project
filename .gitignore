@@ -39,3 +39,10 @@ temp/
 dataset[s]/
 checkpoints/
 .sisyphus/
+plots/
+wandb/
+
+*.npz
+*.pt
+*.pth
+*.safetensors

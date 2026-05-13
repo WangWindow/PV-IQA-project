@@ -1,7 +1,7 @@
-"""Palm vein recognizer training and feature export.
+"""掌静脉识别器训练与特征导出
 
-Train an ArcFace-based recognizer, then export L2-normalized embeddings
-and classifier weights for downstream pseudo-label generation.
+训练基于 ArcFace 的识别器，然后导出 L2 归一化 embedding 和分类器权重，
+用于下游伪标签生成。
 """
 
 import time
@@ -26,14 +26,14 @@ from pv_iqa.utils.logging import ExperimentLogger
 
 
 def _get_recog_splits(config: Config) -> tuple[str, str]:
-    """Return correct split names based on class recognition ratio."""
+    """根据类别识别比例返回正确的划分名称。"""
     if config.class_recognition_ratio > 0:
         return "recognition_train", "recognition_val"
     return "train", "val"
 
 
 def train_recognizer(config: Config) -> Path:
-    """Train ArcFace recognizer. Saves best checkpoint by validation accuracy."""
+    """训练 ArcFace 识别器。按验证准确率保存最佳检查点。"""
     set_seed(config.seed)
     meta = load_metadata(config)
     dev = resolve_device(config.device)
@@ -49,7 +49,7 @@ def train_recognizer(config: Config) -> Path:
         config.recog_dropout,
         config.recog_margin,
         config.recog_scale,
-        pretrained=True,
+        pretrained=config.recog_pretrained,
     ).to(dev)
 
     opt = AdamW(model.parameters(), lr=config.recog_lr, weight_decay=config.recog_wd)
@@ -143,7 +143,7 @@ def train_recognizer(config: Config) -> Path:
 
 
 def export_features(config: Config, ckpt_path: str | Path) -> Path:
-    """Extract L2-normalized embeddings and ArcFace classifier weights."""
+    """提取 L2 归一化 embedding 和 ArcFace 分类器权重。"""
     meta = load_metadata(config)
     out = ensure_dir(config.experiment_dir / "recognizer")
     dev = resolve_device(config.device)
@@ -160,7 +160,7 @@ def export_features(config: Config, ckpt_path: str | Path) -> Path:
     m.load_state_dict(torch.load(ckpt_path, map_location=dev)["model_state"])
     m.eval()
 
-    embs, cids, sids = [], [], []
+    embs, cids, sids, splits = [], [], [], []
     with torch.no_grad():
         for sp in meta["split"].drop_duplicates().tolist():
             ds = PalmVeinDataset(
@@ -183,6 +183,7 @@ def export_features(config: Config, ckpt_path: str | Path) -> Path:
                 embs.append(emb.cpu())
                 cids.extend(b["class_id"].cpu().tolist())
                 sids.extend(b["sample_id"])
+                splits.extend([sp] * len(b["sample_id"]))
 
     all_emb = torch.cat(embs, dim=0)
     save_file(
@@ -196,7 +197,7 @@ def export_features(config: Config, ckpt_path: str | Path) -> Path:
 
     import pandas as pd
 
-    pd.DataFrame({"sample_id": sids, "class_id": cids}).to_csv(
+    pd.DataFrame({"sample_id": sids, "class_id": cids, "split": splits}).to_csv(
         out / "feature_metadata.csv",
         index=False,
     )

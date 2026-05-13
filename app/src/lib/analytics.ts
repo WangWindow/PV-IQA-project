@@ -20,11 +20,23 @@ export type RankedScorePoint = {
   label: string
 }
 
-const QUALITY_BANDS = [
-  { name: "好", min: 65 },
-  { name: "中", min: 35 },
-  { name: "差", min: 0 },
-] as const
+function computeBands(results: ScoreResult[]) {
+  if (results.length < 2) {
+    return [
+      { name: "好", min: 50 },
+      { name: "中", min: 30 },
+      { name: "差", min: 0 },
+    ] as const
+  }
+  const scores = results.map((r) => r.quality_score)
+  const mean = scores.reduce((a, b) => a + b, 0) / scores.length
+  const std = Math.sqrt(scores.reduce((s, x) => s + (x - mean) ** 2, 0) / scores.length)
+  return [
+    { name: "好", min: mean + 0.5 * std },
+    { name: "中", min: mean - 0.5 * std },
+    { name: "差", min: Number.NEGATIVE_INFINITY },
+  ] as const
+}
 
 export function scoreSpread(results: ScoreResult[]): number | null {
   if (!results.length) {
@@ -58,15 +70,13 @@ export function buildJobTrendData(jobs: JobSummary[], limit = 8): JobTrendPoint[
 }
 
 export function buildScoreDistribution(results: ScoreResult[]): ScoreBandPoint[] {
-  return QUALITY_BANDS.map((band, index) => {
-    const upperBound = QUALITY_BANDS[index - 1]?.min ?? Number.POSITIVE_INFINITY
+  const bands = computeBands(results)
+  return bands.map((band, index) => {
+    const upperBound = bands[index - 1]?.min ?? Number.POSITIVE_INFINITY
     const count = results.filter(
       (result) => result.quality_score >= band.min && result.quality_score < upperBound
     ).length
-    return {
-      name: band.name,
-      count,
-    }
+    return { name: band.name, count }
   })
 }
 

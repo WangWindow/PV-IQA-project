@@ -6,65 +6,47 @@ import torch
 from safetensors.torch import load_file
 from scipy.stats import wasserstein_distance
 from sklearn.preprocessing import minmax_scale
-from tqdm.auto import tqdm
 
 from pv_iqa.config import Config
 from pv_iqa.utils.common import ensure_dir
 
-# Degradation type labels (sorted by severity)
-DEGRADE_KEYWORDS = ["enhanced_extreme", "incomplete", "overexposed", "underexposed"]
-
-
-def get_degrade_type(sample_id: str) -> int:
-    for i, kw in enumerate(DEGRADE_KEYWORDS, 1):
-        if kw in sample_id:
-            return i
-    return 0
-
 
 # ---------------------------------------------------------------------------
-# Core pseudo-label computation
-#   Q_raw = 100 × minmax( Q^P + β·WD )
-# Components: PGRG (Q^P) + SDD-FIQA (WD)
-# Degradation penalty is learned during IQA training, not applied here.
+# 核心伪标签计算
+#   Q = 100 × minmax( Q^P + β·WD )
+#
+#
+# 分量（逐样本 i）：
+#   Q^P_i = mean(cos(e_i, e_j))  ∀j: class[j]=class[i], j≠i  (PGRG Eq.2)
+#   WD_i  = Wasserstein(S^P_i, top-k S^N_i)                  (SDD-FIQA)
 # ---------------------------------------------------------------------------
-
-
 def compute_pseudo_labels(
     embeddings: torch.Tensor,
     classifier_weight: torch.Tensor,
     class_ids: torch.Tensor,
     *,
     beta: float = 0.0,
+    mode: str = "ours",
 ) -> np.ndarray:
-    """2-component pseudo-label fusion for unsupervised palm vein IQA.
-
-        Q_raw = 100 × minmax( Q^P + β·WD )
-
-    Components (per-sample i):
-      Q^P_i = mean(cos(e_i, e_j))  ∀j: class[j]=class[i], j≠i  (PGRG Eq.2)
-      WD_i  = Wasserstein(S^P_i, top-k S^N_i)                  (SDD-FIQA)
-
-    Degradation penalty is NOT applied here; per-type correction is
-    learned as a bias during IQA training.
+    """无监督掌静脉 IQA 的双分量伪标签融合。
 
     Args:
-        embeddings: (N, D) L2-normalized feature vectors.
-        classifier_weight: (C, D) ArcFace classifier weight vectors.
-        class_ids: (N,) integer class labels.
-        beta: WD weight (default 0.0, 0 = disable).
+        embeddings: (N, D) L2 归一化特征向量。
+        classifier_weight: (C, D) ArcFace 分类器权重向量。
+        class_ids: (N,) 整数类别标签。
+        beta: WD 权重（默认 0.0，0 = 禁用）。
 
     Returns:
-        (N,) float32 array of quality scores in [0, 100].
+        (N,) float32 数组，质量分数范围 [0, 100]。
     """
 
-    # -- Normalise & convert --------------------------------------------------
+    # -- 归一化与转换 ----------------------------------------------------------
     emb = torch.nn.functional.normalize(embeddings.float(), dim=1).cpu().numpy()
     w = torch.nn.functional.normalize(classifier_weight.float(), dim=1).cpu().numpy()  # noqa: F841
     labels = class_ids.cpu().numpy().astype(np.int64)
     N = emb.shape[0]
 
-    # -- Component 1: Q^P — mean intra-class cosine similarity (PGRG Eq.2) ---
+    # -- 分量 1: Q^P — 类内余弦相似度均值 (PGRG Eq.2) --------------------------
     cos = emb @ emb.T
     qp = np.zeros(N, dtype=np.float32)
 
@@ -74,7 +56,7 @@ def compute_pseudo_labels(
         pos_scores = cos[i, pos_mask]
         qp[i] = float(np.mean(pos_scores)) if len(pos_scores) > 0 else 0.0
 
-    # -- Component 2: WD — Wasserstein distance (SDD-FIQA) --------------------
+    # -- 分量 2: WD — Wasserstein 距离 (SDD-FIQA) -----------------------------
     qwd = np.zeros(N, dtype=np.float32)
 
     if beta > 0.0:
@@ -93,42 +75,35 @@ def compute_pseudo_labels(
             top_neg = np.partition(s_neg, -k)[-k:]
             qwd[i] = float(wasserstein_distance(s_pos, top_neg))
 
-    # -- Weighted fusion → unified minmax → [0, 100] ---------------------------
-    #   Q = 100 × minmax( Q^P + β·WD )   (PGRG Eq.5)
-    blended = qp + beta * qwd
+    # -- 加权融合 → 统一 minmax → [0, 100] -----------------------------------
+    if mode == "sdd":
+        blended = qwd
+    elif mode == "qp_only":
+        blended = qp
+    else:
+        blended = qp + beta * qwd
     scores = 100.0 * minmax_scale(blended)
     return scores.astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
-# Public API — pseudo-label generation pipeline
+# 公开 API — 伪标签生成流水线
 # ---------------------------------------------------------------------------
 #
-# Flow:
-#   1. Load pre-computed recognition features (safetensors)
-#   2. Filter by split (class-disjoint: exclude test classes)
-#   3. Compute 2-component pseudo-labels (Q^P + β·WD)
-#   4. Record degradation type per sample (for learnable bias)
-#   5. Attach pseudo-labels to metadata for downstream IQA training
+# 流程：
+#   1. 加载预计算识别特征 (safetensors)
+#   2. 按 split 筛选（类别隔离：排除测试集类别）
+#   3. 计算双分量伪标签 (Q^P + β·WD)
+#   4. 将伪标签附加到元数据，供下游 IQA 训练使用
 # ---------------------------------------------------------------------------
-
-
 def generate_pseudo_labels(config: Config) -> Path:
     feature_dir = config.experiment_dir / "recognizer"
     tensors = load_file(str(feature_dir / "features.safetensors"))
     meta = pd.read_csv(feature_dir / "feature_metadata.csv")
 
-    idx = (
-        meta.index.to_numpy()
-        if config.pseudo_split == "all"
-        else meta["split"].eq(config.pseudo_split).to_numpy().nonzero()[0]
-    )
-    # Exclude test-class samples from pseudo-label generation.
-    # feature_metadata.csv lacks 'split', so join with full metadata on sample_id.
-    if config.pseudo_split == "all":
-        full_meta = pd.read_csv(config.metadata_path)
-        test_sids = set(full_meta[full_meta["split"] == "test"]["sample_id"])
-        idx = meta[~meta["sample_id"].isin(test_sids)].index.to_numpy()
+    # 伪标签仅用于 IQA 训练集（train + val），排除识别器训练集与测试集。
+    meta = pd.read_csv(feature_dir / "feature_metadata.csv")
+    idx = meta[meta["split"].isin(["train", "val"])].index.to_numpy()
     subset = meta.iloc[idx].reset_index(drop=True)
 
     scores = compute_pseudo_labels(
@@ -136,6 +111,7 @@ def generate_pseudo_labels(config: Config) -> Path:
         classifier_weight=tensors["classifier_weight"].clone(),
         class_ids=tensors["class_ids"][idx].clone(),
         beta=config.pseudo_beta,
+        mode=config.pseudo_mode,
     )
 
     pseudo_df = pd.DataFrame(
@@ -145,17 +121,10 @@ def generate_pseudo_labels(config: Config) -> Path:
         }
     )
 
-    # Record degradation type for learnable bias during IQA training
-    pseudo_df["degrade_type"] = pseudo_df["sample_id"].apply(get_degrade_type)
-
-    # Attach to metadata — use merge to handle potential duplicate sample_ids safely
+    # 附加到元数据 — 使用 merge 安全处理可能的重复 sample_id
     full_meta = pd.read_csv(config.metadata_path)
     quality_map = pseudo_df.set_index("sample_id")["quality_score"]
-    degrade_map = pseudo_df.set_index("sample_id")["degrade_type"]
     full_meta["quality_score"] = full_meta["sample_id"].map(quality_map)
-    full_meta["degrade_type"] = (
-        full_meta["sample_id"].map(degrade_map).fillna(0).astype(int)
-    )
     full_meta.to_csv(config.metadata_path, index=False)
 
     out = ensure_dir(config.experiment_dir / "pseudo_labels") / "pseudo_labels.csv"

@@ -13,10 +13,12 @@ class Config:
     device: str = "auto"                    # 训练设备 (auto/cpu/cuda)
     amp: bool = True                        # 自动混合精度（仅 CUDA 生效）
     num_workers: int = 4                    # DataLoader 工作线程数
-    wandb_enabled: bool = False             # 是否启用 WandB 日志
+    wandb_enabled: bool = True              # 是否启用 WandB 日志
+    wandb_project: str = "pv-iqa"           # WandB 项目名
+    wandb_run_name: str = ""                # WandB 运行名（空=用实验名）
 
     # -- 数据 --------------------------------------------------------------------
-    data_root: str = "datasets/HFUT-PV-ROI" # 数据集根目录
+    data_root: str = "datasets/HFUT-PV-ROI-origin"  # 数据集位置
     metadata_path: str = "auto"             # 元数据 CSV 路径，auto=实验目录下生成
     identity_mode: str = "separate"         # 身份解析模式：separate=左右手分开, merge_person=合并
     image_size: int = 224                   # 输入图像尺寸
@@ -40,28 +42,27 @@ class Config:
     recog_lr: float = 3e-4                  # 识别器学习率
     recog_wd: float = 1e-4                  # 识别器权重衰减
     recog_warmup_epochs: int = 1            # 识别器学习率预热轮数
+    recog_checkpoint: str = ""              # 复用识别器路径（空=重新训练）
 
     # -- 伪标签生成 --------------------------------------------------------------
-    # 公式: Q = 100 × minmax( Q^P + β·WD − λ·degrade )
-    #   Q^P:   类内余弦相似度期望 (PGRG, Zou et al. IEEE TIM 2023, Eq.2)
-    #   WD:    Wasserstein 距离 (SDD-FIQA, Ou et al. CVPR 2021, Eq.4)
-    #          取 interclass 相似度前 n 个最大值，n = intraclass 样本数
-    #   degrade: 退化类型惩罚 (根据样本 ID 关键词判定)
-    pseudo_split: str = "all"               # 伪标签计算所用 split
-    pseudo_delta: float = 1.0               # Q^P 权重
     pseudo_beta: float = 1.0                # WD 权重
+    pseudo_mode: str = "ours"               # 伪标签模式: ours / sdd / qp_only
 
     # -- IQA 回归模型 -------------------------------------------------------------
     iqa_backbone: str = "mobilenetv3_large_100"
     iqa_pretrained: bool = True             # 是否加载 ImageNet 预训练权重
-    iqa_epochs: int = 30                    # IQA 训练轮数
-    iqa_lr: float = 2e-4                    # IQA 学习率
+    iqa_epochs: int = 40                    # IQA 训练轮数
+    iqa_lr: float = 5e-4                    # IQA 学习率
     iqa_wd: float = 5e-5                    # IQA 权重衰减
     iqa_warmup_epochs: int = 2              # IQA 学习率预热轮数
     iqa_grad_clip: float = 1.0              # 梯度裁剪阈值
-    iqa_huber_delta: float = 0.1            # Huber Loss 的 delta 参数
-    iqa_rank_weight: float = 0.3            # PGRG 排序损失权重
-    iqa_min_rank_gap: float = 0.05          # 排序对的最小伪标签差距
+
+    iqa_huber_delta: float = 2.0             # Huber Loss 的 delta 参数
+    iqa_rank_weight: float = 0.2             # Label Ranking Loss 权重 (0=关闭)
+    iqa_min_rank_gap: float = 2.0           # 排序对的最小伪标签分数差距
+    iqa_degrade_rank_weight: float = 0.5    # Degrade Ranking Loss 权重 (0=消融)
+    iqa_degrade_margin: float = 1.0         # 退化排序间隔
+    iqa_sigmoid_tau: float = 20.0           # 标签排序归一化的 sigmoid 温度系数
 
     # -- 评估 --------------------------------------------------------------------
     eval_split: str = "test"                # 评估所用 split

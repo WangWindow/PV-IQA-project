@@ -229,6 +229,10 @@ export function HistoryPage({ dashboard }: { dashboard: Dashboard }) {
     () => buildRankedScoreData(dashboard.selectedResults),
     [dashboard.selectedResults]
   )
+  const allScores = useMemo(
+    () => dashboard.selectedResults.map((r) => r.quality_score),
+    [dashboard.selectedResults]
+  )
 
   return (
     <motion.div
@@ -366,7 +370,7 @@ export function HistoryPage({ dashboard }: { dashboard: Dashboard }) {
                       r.relative_path.split("/").pop() || r.relative_path,
                       r.relative_path,
                       r.quality_score.toFixed(2),
-                      qualityLabel(r.quality_score),
+                      qualityLabel(r.quality_score, allScores),
                     ])
                     downloadCsv(
                       `pv-iqa-${selectedJob.id.slice(0, 8)}.csv`,
@@ -460,7 +464,7 @@ export function HistoryPage({ dashboard }: { dashboard: Dashboard }) {
                           <div className="text-sm text-muted-foreground">质量分数</div>
                           <div className="mt-2 flex items-center gap-3">
                             <div className="text-4xl font-semibold tabular-nums">{formatScore(topResult.quality_score)}</div>
-                            <Badge variant="secondary">{qualityLabel(topResult.quality_score)}</Badge>
+                            <Badge variant="secondary">{qualityLabel(topResult.quality_score, allScores)}</Badge>
                           </div>
                         </div>
                         <Progress value={clampPercentage(topResult.quality_score)} className="h-2" />
@@ -518,7 +522,7 @@ export function HistoryPage({ dashboard }: { dashboard: Dashboard }) {
                                     </TableCell>
                                   <TableCell className="max-w-[320px] truncate">{result.relative_path}</TableCell>
                                   <TableCell>
-                                    <Badge variant="secondary">{qualityLabel(result.quality_score)}</Badge>
+                                    <Badge variant="secondary">{qualityLabel(result.quality_score, allScores)}</Badge>
                                   </TableCell>
                                   <TableCell className="text-right font-medium tabular-nums">
                                     {formatScore(result.quality_score)}

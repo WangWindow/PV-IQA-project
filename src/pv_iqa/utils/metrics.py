@@ -199,11 +199,110 @@ def verification_metrics(
     return evaluator.evaluate(embeddings, class_ids)
 
 
+def compute_eer_from_embeddings(
+    embeddings: np.ndarray,
+    class_ids: np.ndarray,
+    rejection_rates: list[float],
+) -> tuple[list[float], float]:
+    """从嵌入向量计算各拒绝率下的 EER 及 AOC。
+
+    参数:
+        embeddings: (N, D) L2 归一化后的嵌入，按质量升序排列。
+        class_ids:  (N,) 类别标签。
+        rejection_rates: 拒绝率列表，如 [0.0, 0.05, ..., 0.40]。
+
+    返回:
+        eer_values: 各拒绝率对应的 EER 值列表。
+        aoc:        Area of Curve 值（梯形积分，PGRG Eq.13-14）。
+    """
+    total = len(embeddings)
+    eer_values: list[float] = []
+
+    for rr in rejection_rates:
+        keep_n = max(3, int(total * (1 - rr)))
+        embs = embeddings[-keep_n:]
+        ids = class_ids[-keep_n:]
+        N = len(embs)
+
+        sim = embs @ embs.T
+        iu, ju = np.triu_indices(N, k=1)
+        pair_sim = sim[iu, ju]
+        same_class = ids[iu] == ids[ju]
+
+        genuine = pair_sim[same_class]
+        impostor = pair_sim[~same_class]
+
+        if len(genuine) == 0 or len(impostor) == 0:
+            eer_values.append(float("nan"))
+            continue
+
+        thresholds = np.linspace(
+            min(genuine.min(), impostor.min()),
+            max(genuine.max(), impostor.max()),
+            1000,
+        )
+
+        best_eer = 1.0
+        for t in thresholds:
+            far = (impostor >= t).mean()
+            frr = (genuine < t).mean()
+            best_eer = min(best_eer, (far + frr) / 2.0)
+        eer_values.append(best_eer)
+
+    aoc = 0.0
+    for i in range(len(rejection_rates) - 1):
+        if not np.isnan(eer_values[i]) and not np.isnan(eer_values[i + 1]):
+            aoc += (
+                (eer_values[i] + eer_values[i + 1])
+                / 2.0
+                * (rejection_rates[i + 1] - rejection_rates[i])
+            )
+    return eer_values, aoc
+
+
+def compute_rejection_accuracy(
+    embeddings: np.ndarray,
+    class_ids: np.ndarray,
+    quality_scores: np.ndarray,
+    rejection_rates: list[float],
+) -> dict[str, float]:
+    """计算丢弃低质量样本后的 Rank-1 识别准确率。
+
+    参数:
+        embeddings:     (N, D) L2 归一化后的嵌入。
+        class_ids:      (N,) 类别标签。
+        quality_scores: (N,) 质量分数（值越大质量越高）。
+        rejection_rates: 拒绝率列表，如 [0.0, 0.1, 0.2, 0.3]。
+
+    返回:
+        字典，键为 "acc@100%", "acc@90%", ...，值为准确率。
+    """
+    sort_idx = np.argsort(quality_scores)
+    total = len(quality_scores)
+
+    results: dict[str, float] = {}
+    for reject_rate in rejection_rates:
+        keep_n = max(1, int(total * (1 - reject_rate)))
+        keep_idx = sort_idx[-keep_n:]
+        keep_emb = embeddings[keep_idx]
+        keep_ids = class_ids[keep_idx]
+
+        sim = keep_emb @ keep_emb.T
+        np.fill_diagonal(sim, -np.inf)
+        best = np.argmax(sim, axis=1)
+        acc = float((keep_ids[best] == keep_ids).mean())
+        results[f"acc@{1 - reject_rate:.0%}"] = float(acc)
+
+    return results
+
+
 __all__ = [
     "ClassificationReport",
     "RegressionReport",
     "VerificationEvaluator",
     "classification_accuracy",
+    "compute_eer_from_embeddings",
+    "compute_rejection_accuracy",
     "evaluate_classification",
     "evaluate_regression",
     "pairwise_ranking_accuracy",

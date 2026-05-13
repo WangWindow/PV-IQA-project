@@ -1,11 +1,8 @@
-"""IQA regressor training with pseudo-label supervision.
+"""基于伪标签监督的 IQA 回归模型训练。
 
-Loss = Huber(pred, pseudo_label) + rank_weight × RankingLoss(pred, pseudo_label)
-
-The label-based ranking loss (PGRG, Zou et al. IEEE TIM 2023, Eq.10-11):
-for any pair (i, j) where pseudo_label_i > pseudo_label_j + min_gap:
-    penalize if pred_i < pred_j
-This preserves the relative ordering of quality scores during training.
+Loss = huber_w × Huber(pred, label)
+     + rank_w   × LabelRank(pred, label)
+     + drank_w  × DegradeRank(pred_mild, pred_severe)
 """
 
 from pathlib import Path
@@ -15,10 +12,12 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 from tqdm.auto import tqdm
 
+
 from pv_iqa.config import Config
 from pv_iqa.models import PalmVeinIQARegressor
 from pv_iqa.utils.common import autocast, ensure_dir, resolve_device, to_device
 from pv_iqa.utils.datasets import PalmVeinDataset, create_dataloader, load_metadata
+from pv_iqa.utils.degradation import generate_ranking_pair
 from pv_iqa.utils.logging import ExperimentLogger
 from pv_iqa.utils.metrics import evaluate_regression
 
@@ -66,16 +65,7 @@ def train_iqa(config: Config) -> Path:
         pretrained=config.iqa_pretrained,
     ).to(device)
 
-    degrade_raw = torch.nn.Parameter(
-        torch.tensor([0.0, -0.05, -0.18, -0.25, -0.25], device=device)
-    )
-    opt = AdamW(
-        [
-            {"params": model.parameters()},
-            {"params": [degrade_raw], "lr": config.iqa_lr * 50.0},
-        ],
-        lr=config.iqa_lr, weight_decay=config.iqa_wd,
-    )
+    opt = AdamW(model.parameters(), lr=config.iqa_lr, weight_decay=config.iqa_wd)
 
     warmup = torch.optim.lr_scheduler.LinearLR(
         opt,
@@ -95,9 +85,11 @@ def train_iqa(config: Config) -> Path:
 
     best_mae = float("inf")
     best_path = output_dir / "best.pt"
+    global_step = 0
 
     for epoch in range(1, config.iqa_epochs + 1):
         model.train()
+        epoch_huber = epoch_rank = epoch_drank = 0.0
         for batch in tqdm(train_loader, desc=f"iqa-train-{epoch}", leave=False):
             batch = to_device(batch, device)
             opt.zero_grad(set_to_none=True)
@@ -106,29 +98,39 @@ def train_iqa(config: Config) -> Path:
                 pred = model(batch["image"])
                 target = batch["target"].float()
 
-                if "degrade_type" in batch:
-                    dtypes = batch["degrade_type"].long()
-                    max_penalty = 0.5
-                    scale = -max_penalty * torch.sigmoid(degrade_raw[dtypes])
-                    pred = pred * (1.0 + scale)
-
                 l_huber = F.huber_loss(pred, target, delta=config.iqa_huber_delta)
+                epoch_huber += l_huber.item()
+                l_rank = torch.zeros((), device=device)
+                l_drank = torch.zeros((), device=device)
 
-                # Label-based ranking loss (PGRG Eq.10-11)
-                t_i = target[:, None]
-                t_j = target[None, :]
-                pair_gap = t_i - t_j
-                valid = pair_gap > config.iqa_min_rank_gap
-
-                if valid.any():
-                    p_norm = (pred - pred.min()) / (pred.max() - pred.min() + 1e-8)
-                    pn_i = p_norm.unsqueeze(1).expand(-1, len(pred))
-                    pn_j = p_norm.unsqueeze(0).expand(len(pred), -1)
-                    l_rank = torch.relu(pn_j[valid] - pn_i[valid]).mean()
+                if config.iqa_rank_weight > 0:
+                    t_i = target[:, None]
+                    t_j = target[None, :]
+                    pair_gap = t_i - t_j
+                    valid = pair_gap > config.iqa_min_rank_gap
+                    if valid.any():
+                        p_norm = torch.sigmoid(pred / config.iqa_sigmoid_tau)
+                        pn_i = p_norm.unsqueeze(1).expand(-1, len(pred))
+                        pn_j = p_norm.unsqueeze(0).expand(len(pred), -1)
+                        l_rank = torch.relu(pn_j[valid] - pn_i[valid]).mean()
+                        epoch_rank += l_rank.item()
+                    loss = l_huber + config.iqa_rank_weight * l_rank
                 else:
-                    l_rank = torch.zeros((), device=device)
+                    loss = l_huber
 
-                loss = l_huber + config.iqa_rank_weight * l_rank
+                if config.iqa_degrade_rank_weight > 0:
+                    low_mask = target < target.median()
+                    if low_mask.any():
+                        deg_mild, deg_severe = generate_ranking_pair(
+                            batch["image"][low_mask]
+                        )
+                        pred_mild = model(deg_mild)
+                        pred_severe = model(deg_severe)
+                        l_drank = F.relu(
+                            pred_severe - pred_mild + config.iqa_degrade_margin
+                        ).mean()
+                        epoch_drank += l_drank.item()
+                        loss = loss + config.iqa_degrade_rank_weight * l_drank
 
             scaler.scale(loss).backward()
             scaler.unscale_(opt)
@@ -138,8 +140,16 @@ def train_iqa(config: Config) -> Path:
             )
             scaler.step(opt)
             scaler.update()
+            global_step += 1
 
         sched.step()
+
+        n_batches = len(train_loader)
+        logger.log_metrics({
+            "train/huber_raw": epoch_huber / n_batches,
+            "train/label_rank": epoch_rank / n_batches,
+            "train/degrade_rank": epoch_drank / n_batches,
+        }, step=epoch)
 
         model.eval()
         preds, targets = [], []
@@ -147,20 +157,22 @@ def train_iqa(config: Config) -> Path:
             for batch in tqdm(val_loader, desc=f"iqa-val-{epoch}", leave=False):
                 batch = to_device(batch, device)
                 pred = model(batch["image"])
-                if "degrade_type" in batch:
-                    dtypes = batch["degrade_type"].long()
-                    max_penalty = 0.5
-                    scale = -max_penalty * torch.sigmoid(degrade_raw[dtypes])
-                    pred = pred * (1.0 + scale)
                 preds.extend(pred.cpu().tolist())
                 targets.extend(batch["target"].cpu().tolist())
 
         report = evaluate_regression(targets, preds)
         logger.info(
             f"Epoch {epoch:3d} | MAE={report.mae:.4f} "
-            f"RMSE={report.rmse:.4f} ρ={report.spearman:.3f} "
-            f"deg={degrade_raw.tolist()}"
+            f"RMSE={report.rmse:.4f} ρ={report.spearman:.3f}"
         )
+        logger.log_metrics({
+            "val/mae": report.mae,
+            "val/rmse": report.rmse,
+            "val/pearson": report.pearson,
+            "val/spearman": report.spearman,
+            "val/rank_acc": report.ranking_accuracy,
+            "epoch": epoch,
+        }, step=epoch)
 
         if report.mae < best_mae:
             best_mae = report.mae
@@ -169,7 +181,6 @@ def train_iqa(config: Config) -> Path:
                     "model_state": model.state_dict(),
                     "best_mae": best_mae,
                     "backbone": config.iqa_backbone,
-                    "degrade_scales": degrade_raw.tolist(),
                 },
                 best_path,
             )

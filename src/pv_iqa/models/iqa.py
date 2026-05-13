@@ -6,7 +6,7 @@ from torch import nn
 
 
 class IQABackbone(nn.Module):
-    """Multi-scale feature extractor for IQA. Wraps timm with features_only=True."""
+    """IQA 多尺度特征提取器，封装 timm 并启用 features_only=True。"""
 
     def __init__(
         self,
@@ -33,7 +33,7 @@ class IQABackbone(nn.Module):
 
 
 class SEAttention(nn.Module):
-    """Squeeze-Excitation channel attention."""
+    """Squeeze-Excitation 通道注意力。"""
 
     def __init__(self, channels: int, reduction: int = 16):
         super().__init__()
@@ -51,13 +51,13 @@ class SEAttention(nn.Module):
 
 
 class PalmVeinIQARegressor(nn.Module):
-    """Multi-scale IQA regressor.
+    """多尺度 IQA 回归器。
 
     backbone → {stage1, stage3, stage4}
-      stage1 → Conv3×3 → GAP → 32d      (texture/sharpness)
-      stage3 → Conv1×1 → GAP → 64d      (mid-level structure)
-      stage4 → SE-Attn → GAP → ch4      (semantic quality)
-    concat → FC(128) → FC(1)   (linear output, no activation)
+      stage1 → Conv3×3 → GAP → 32d      (纹理/清晰度)
+      stage3 → Conv1×1 → GAP → 64d      (中层结构)
+      stage4 → GAP → SE-Attn → ch4      (语义质量)
+    concat → FC(128) → FC(1)   (线性输出，无激活函数)
     """
 
     def __init__(
@@ -69,33 +69,38 @@ class PalmVeinIQARegressor(nn.Module):
     ):
         super().__init__()
         self.backbone = IQABackbone(
-            backbone_name, pretrained=pretrained, out_indices=out_indices,
+            backbone_name,
+            pretrained=pretrained,
+            out_indices=out_indices,
         )
 
         with torch.no_grad():
-            dims = [
-                f.shape[1]
-                for f in self.backbone(torch.zeros(1, 3, 224, 224))
-            ]
+            dims = [f.shape[1] for f in self.backbone(torch.zeros(1, 3, 224, 224))]
 
         self.branch1 = nn.Sequential(
             nn.Conv2d(dims[0], 32, 3, padding=1),
-            nn.BatchNorm2d(32), nn.ReLU(),
-            nn.AdaptiveAvgPool2d(1), nn.Flatten(),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
         )
         self.branch3 = nn.Sequential(
             nn.Conv2d(dims[1], 64, 1),
-            nn.BatchNorm2d(64), nn.ReLU(),
-            nn.AdaptiveAvgPool2d(1), nn.Flatten(),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
         )
         self.branch4 = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
             SEAttention(dims[2]),
-            nn.AdaptiveAvgPool2d(1), nn.Flatten(),
+            nn.Flatten(),
         )
 
         self.head = nn.Sequential(
             nn.Linear(32 + 64 + dims[2], 128),
-            nn.ReLU(), nn.Dropout(0.1),
+            nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(128, 1),
         )
 

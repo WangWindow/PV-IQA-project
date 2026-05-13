@@ -40,13 +40,18 @@ export function statusVariant(status: JobStatus): "secondary" | "destructive" | 
   return "outline"
 }
 
-export function qualityLabel(score: number): string {
-  if (score >= 65) {
-    return "好"
+export function qualityLabel(score: number, allScores: number[]): string {
+  if (allScores.length < 2) {
+    return score >= 50 ? "好" : score >= 30 ? "中" : "差"
   }
-  if (score >= 35) {
-    return "中"
-  }
+  const mean = allScores.reduce((a, b) => a + b, 0) / allScores.length
+  const std = Math.sqrt(
+    allScores.reduce((sum, s) => sum + (s - mean) ** 2, 0) / allScores.length
+  )
+  const hi = mean + 0.5 * std
+  const lo = mean - 0.5 * std
+  if (score >= hi) return "好"
+  if (score >= lo) return "中"
   return "差"
 }
 

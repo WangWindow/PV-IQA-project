@@ -9,23 +9,22 @@ from torch import nn
 
 
 # ---------------------------------------------------------------------------
-# ArcFace (Additive Angular Margin Loss)
+# ArcFace (加性角度间隔损失)
 #   Deng et al., "ArcFace: Additive Angular Margin Loss for Deep Face
 #   Recognition", CVPR 2019.
 #
 #   logits_i = s × ( onehot_i × cos(θ + m) + (1 − onehot_i) × cos(θ) )
 #
-#   where:
-#     θ = arccos(cos) = angle between embedding and weight vector
-#     m = angular margin penalty (default 0.5)
-#     s = feature scale (default 64)
+#   其中:
+#     θ = arccos(cos) = 嵌入向量与权重向量之间的角度
+#     m = 角度间隔惩罚 (默认 0.5)
+#     s = 特征缩放因子 (默认 64)
 #
-#   The margin penalty forces intra-class embeddings closer and inter-class
-#   embeddings farther apart on the hypersphere, which enables Q^P (intra-class
-#   cosine similarity) to serve as a quality metric.
+#   角度间隔惩罚迫使类内嵌入更近、类间嵌入更远，
+#   从而让 Q^P（类内余弦相似度）能作为质量度量。
 # ---------------------------------------------------------------------------
 class ArcMarginHead(nn.Module):
-    """ArcFace classification head (Deng et al., CVPR 2019)."""
+    """ArcFace 分类头 (Deng et al., CVPR 2019)。"""
 
     def __init__(
         self,
@@ -49,7 +48,7 @@ class ArcMarginHead(nn.Module):
     def forward(
         self, embeddings: torch.Tensor, labels: torch.Tensor | None
     ) -> torch.Tensor:
-        # Cosine similarity between L2-normalized embedding and weight vectors
+        # L2 归一化嵌入与权重间的余弦相似度
         cosine = F.linear(F.normalize(embeddings), F.normalize(self.weight))
 
         if labels is None:
@@ -59,10 +58,10 @@ class ArcMarginHead(nn.Module):
         sine = torch.sqrt(torch.clamp(1.0 - cosine.pow(2), min=0.0))
         phi = cosine * self.cos_m - sine * self.sin_m
 
-        # Numeric stability: when cos(θ + m) < cos(π − m), use cos(θ) − m·sin(m)
+        # 数值稳定: 当 cos(θ + m) < cos(π − m) 时，改用 cos(θ) − m·sin(m)
         phi = torch.where(cosine > self.th, phi, cosine - self.mm)
 
-        # One-hot mask: use cos(θ + m) for target class, cos(θ) for others
+        # one-hot 掩码: 目标类用 cos(θ + m)，其他类用 cos(θ)
         one_hot = torch.zeros_like(cosine)
         one_hot.scatter_(1, labels.view(-1, 1), 1.0)
         logits = (one_hot * phi) + ((1.0 - one_hot) * cosine)
@@ -71,7 +70,7 @@ class ArcMarginHead(nn.Module):
 
 
 class RecognitionBackbone(nn.Module):
-    """Global feature backbone for palm vein recognition."""
+    """掌脉识别全局特征提取器。"""
 
     def __init__(
         self, backbone_name: str = "mobilenetv3_large_100", *, pretrained: bool

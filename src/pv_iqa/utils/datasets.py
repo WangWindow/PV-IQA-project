@@ -1,11 +1,10 @@
-"""Dataset utilities: metadata builder, PalmVeinDataset, and DataLoader factory."""
+"""数据集工具：元数据构建器、PalmVeinDataset 和 DataLoader 工厂。"""
 
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import numpy as np
 import pandas as pd
 from PIL import Image
 from sklearn.utils import check_random_state
@@ -16,14 +15,6 @@ from pv_iqa.utils.common import save_csv
 from pv_iqa.utils.transforms import build_transforms
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-DEGRADE_KEYWORDS = ["enhanced_extreme", "incomplete", "overexposed", "underexposed"]
-
-
-def _get_degrade_type(sample_id: str) -> int:
-    for i, kw in enumerate(DEGRADE_KEYWORDS, 1):
-        if kw in sample_id:
-            return i
-    return 0
 
 
 @dataclass(slots=True)
@@ -44,12 +35,12 @@ def _resolve_class_name(folder: str, mode: str) -> str:
 
 
 def build_metadata(config: Config) -> pd.DataFrame:
-    """Scan dataset directory and build class-disjoint metadata (PGRG Sec.IV-B).
+    """扫描数据集目录，构建 class-disjoint 元数据（PGRG Sec.IV-B）。
 
-    Three non-overlapping splits:
-      recognition dataset → recognition_train / recognition_val
-      IQA dataset         → iqa_train / iqa_val
-      test dataset        → test
+    三个互不重叠的划分：
+      recognition 数据集 → recognition_train / recognition_val
+      IQA 数据集         → iqa_train / iqa_val
+      test 数据集        → test
     """
     root = Path(config.data_root)
     if not root.exists():
@@ -72,7 +63,7 @@ def build_metadata(config: Config) -> pd.DataFrame:
     recognition_classes = set(class_ids[:n_recognition])
     test_classes = set(class_ids[n_recognition + n_iqa :])
 
-    # Split labels: recognition → "recognition_*", IQA → "train"/"val", test → "test"
+    # 划分标签：recognition → "recognition_*"，IQA → "train"/"val"，test → "test"
     SPLIT_MAP = {
         "recognition": ("recognition_train", "recognition_val"),
         "iqa": ("train", "val"),
@@ -124,7 +115,6 @@ def build_metadata(config: Config) -> pd.DataFrame:
                 )
 
     df = pd.DataFrame(recs)
-    df["degrade_type"] = df["sample_id"].apply(_get_degrade_type)
     save_csv(df, config.metadata_path)
     return df
 
@@ -166,7 +156,6 @@ class PalmVeinDataset(Dataset):
             item["target"] = int(row["class_id"])
         elif self.target_kind == "quality_score":
             item["target"] = float(row["quality_score"])
-            item["degrade_type"] = int(row.get("degrade_type", 0))
         return item
 
 
