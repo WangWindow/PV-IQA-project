@@ -1,445 +1,55 @@
+"""PV-IQA 后端应用入口。
+
+职责仅限于：
+  1. 创建 FastAPI 实例
+  2. 执行数据库迁移
+  3. 挂载中间件和路由
+  4. 启动时打印提示信息
+
+所有业务逻辑均在其他模块中，主文件保持精简。
+启动命令：uvicorn app.backend.main:app --host 0.0.0.0 --port 6005 --reload
+"""
+
 from __future__ import annotations
 
-import json
-import os
-import sqlite3
-import subprocess
-import sys
-import threading
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
-
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-os.environ.setdefault("WANDB_MODE", "offline")
+from .config import UPLOAD_ROOT
+from .database import run_migrations
+from .middleware.error_handler import register_error_handlers
+from .middleware.logging import AuditLogMiddleware
+from .routers import auth, health, images, jobs, logs, score, settings
 
-APP = Path(__file__).resolve().parents[1]
-REPO = APP.parent
-UPLOAD_ROOT = APP / "data" / "uploads"
-DB_PATH = APP / "data" / "app.db"
-BIN_CPU = APP / "bin" / "pv-iqa-cpu"
-BIN_CUDA = APP / "bin" / "pv-iqa-cuda"
+# ── 数据库迁移 ──────────────────────────────────────────
+# 启动时自动执行所有未应用的迁移
+run_migrations()
 
-UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+# ── 创建 FastAPI 应用 ──────────────────────────────────
+app = FastAPI(title="PV-IQA", version="3.1.0")
 
-app = FastAPI(title="PV-IQA")
+# ── 静态文件服务（上传目录） ────────────────────────────
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploads")
 
-con = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-con.row_factory = sqlite3.Row
-con.executescript(
-    """
-    PRAGMA journal_mode = WAL;
-    CREATE TABLE IF NOT EXISTS jobs (
-        id TEXT PRIMARY KEY,
-        kind TEXT,
-        status TEXT,
-        backend TEXT,
-        device TEXT,
-        run_name TEXT,
-        input_count INTEGER,
-        processed_count INTEGER DEFAULT 0,
-        result_count INTEGER DEFAULT 0,
-        progress REAL DEFAULT 0,
-        stage TEXT DEFAULT '',
-        error TEXT,
-        average_score REAL,
-        best_score REAL,
-        worst_score REAL,
-        created_at TEXT,
-        updated_at TEXT,
-        completed_at TEXT
-    );
-    CREATE TABLE IF NOT EXISTS results (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_id TEXT REFERENCES jobs(id),
-        image_path TEXT,
-        relative_path TEXT,
-        public_url TEXT,
-        quality_score REAL
-    );
-    """
-)
-con.commit()
+# ── 中间件注册 ──────────────────────────────────────────
+# 注意：AuditLogMiddleware 使用纯 ASGI 实现（非 BaseHTTPMiddleware），
+# 直接传给 app.add_middleware，无需额外参数
+app.add_middleware(AuditLogMiddleware)
+register_error_handlers(app)
 
-db_lock = threading.Lock()
+# ── 路由注册 ────────────────────────────────────────────
+app.include_router(health.router)
+app.include_router(score.router)
+app.include_router(jobs.router)
+app.include_router(auth.router)
+app.include_router(settings.router)
+app.include_router(logs.router)
+app.include_router(images.router)
 
 
-def now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
-
-
-@app.exception_handler(HTTPException)
-async def handle_http_exception(_: Request, exc: HTTPException) -> JSONResponse:
-    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-    return JSONResponse(status_code=exc.status_code, content={"error": detail})
-
-
-@app.exception_handler(Exception)
-async def handle_unhandled_exception(_: Request, exc: Exception) -> JSONResponse:
-    return JSONResponse(status_code=500, content={"error": str(exc)})
-
-
-def db_execute(query: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
-    with db_lock:
-        cursor = con.execute(query, params)
-        con.commit()
-        return cursor
-
-
-def db_fetchone(query: str, params: tuple[object, ...] = ()) -> sqlite3.Row | None:
-    with db_lock:
-        return con.execute(query, params).fetchone()
-
-
-def db_fetchall(query: str, params: tuple[object, ...] = ()) -> list[sqlite3.Row]:
-    with db_lock:
-        return con.execute(query, params).fetchall()
-
-
-def default_run_name() -> str:
-    checkpoints = REPO / "checkpoints"
-    if not checkpoints.is_dir():
-        return ""
-
-    candidates = sorted(
-        (
-            run_dir.name
-            for run_dir in checkpoints.iterdir()
-            if (run_dir / "iqa" / "best.onnx").exists()
-        )
-    )
-    return candidates[-1] if candidates else ""
-
-
-def binary_available(path: Path) -> dict[str, object]:
-    available = path.exists()
-    return {"available": available, "state": "ready" if available else "error"}
-
-
-def rust_score(run: str, paths: list[str], device: str, job_id: str = "", total: int = 0) -> list[dict[str, object]]:
-    onnx_path = REPO / "checkpoints" / run / "iqa" / "best.onnx"
-    if not onnx_path.exists():
-        raise RuntimeError(f"Rust model not found: {onnx_path}")
-
-    binary = BIN_CUDA if device == "cuda" else BIN_CPU
-
-    if len(paths) == 1:
-        result = subprocess.run(
-            [str(binary), "score", "--model", str(onnx_path), "--image", paths[0], "--device", device],
-            capture_output=True, text=True, timeout=120,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-        return [json.loads(result.stdout)]
-
-    # Batch: stream progress from stderr, capture result from stdout
-    batch_dir = str(Path(paths[0]).parent)
-    proc = subprocess.Popen(
-        [str(binary), "batch", "--model", str(onnx_path), "--dir", batch_dir, "--device", device],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    )
-
-    # Read stderr line by line for progress
-    import select
-    stderr_lines = []
-    while proc.poll() is None:
-        if proc.stderr:
-            line = proc.stderr.readline()
-            if line:
-                stderr_lines.append(line)
-                if line.startswith("PROGRESS:") and job_id:
-                    try:
-                        parts = line.strip().split(":")[1]
-                        done, total_str = parts.split("/")
-                        pct = round(int(done) / int(total_str) * 100, 1)
-                        db_execute(
-                            "UPDATE jobs SET processed_count=?, progress=?, stage=?, updated_at=? WHERE id=?",
-                            (int(done), pct, f"scoring {done}/{total_str}", now_iso(), job_id),
-                        )
-                    except Exception:
-                        pass
-
-    stdout, stderr = proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError((stderr or stdout).strip())
-    return json.loads(stdout)
-
-
-def py_score(run: str, paths: list[str]) -> list[dict[str, object]]:
-    sys.path.insert(0, str(REPO / "src"))
-    from pv_iqa.config import Config
-    from pv_iqa.eval import score_folder
-
-    config = Config()
-    config.name = run
-    config.metadata_path = str(REPO / "checkpoints" / run / "data" / "metadata.csv")
-    checkpoint = str(REPO / "checkpoints" / run / "iqa" / "best.pt")
-    if len(paths) == 1:
-        from pv_iqa.eval import score_image
-        return [score_image(config, checkpoint, paths[0])]
-    return score_folder(config, checkpoint, Path(paths[0]).parent)
-
-
-def do_score(run: str, paths: list[str], backend: str, device: str) -> list[dict[str, object]]:
-    if backend == "rust":
-        try:
-            return rust_score(run, paths, device)
-        except Exception:
-            return py_score(run, paths)
-    return py_score(run, paths)
-
-
-def save_upload(upload: UploadFile, task_dir: str) -> tuple[str, str, str]:
-    directory = UPLOAD_ROOT / task_dir
-    directory.mkdir(parents=True, exist_ok=True)
-
-    name = upload.filename or "unknown"
-    path = directory / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    if path.exists():
-        stem = Path(name).stem
-        suffix = Path(name).suffix
-        counter = 1
-        while (directory / f"{stem}_{counter}{suffix}").exists():
-            counter += 1
-        name = f"{stem}_{counter}{suffix}"
-        path = directory / name
-
-    path.write_bytes(upload.file.read())
-    return str(path), upload.filename or "", f"/uploads/{task_dir}/{name}"
-
-
-def process_job(
-    job_id: str,
-    run_name: str,
-    paths: list[tuple[str, str, str]],
-    backend: str,
-    device: str,
-) -> None:
-    sys.path.insert(0, str(REPO / "src"))
-    from pv_iqa.config import Config
-    from pv_iqa.eval import score_image
-
-    config = Config()
-    config.name = run_name
-    config.metadata_path = str(REPO / "checkpoints" / run_name / "data" / "metadata.csv")
-    checkpoint = str(REPO / "checkpoints" / run_name / "iqa" / "best.pt")
-    total = len(paths)
-
-    try:
-        results: list[dict[str, object]] = []
-
-        if backend == "rust":
-            all_paths = [p[0] for p in paths]
-            db_execute(
-                "UPDATE jobs SET stage=?, updated_at=? WHERE id=?",
-                (f"scoring 0/{total}", now_iso(), job_id),
-            )
-            try:
-                results = rust_score(run_name, all_paths, device, job_id, total)
-            except Exception:
-                for abs_path, relative_path, public_url in paths:
-                    row = score_image(config, checkpoint, abs_path)
-                    row["relative_path"] = relative_path
-                    row["public_url"] = public_url
-                    results.append(row)
-                    db_execute(
-                        "UPDATE jobs SET processed_count=?, progress=?, stage=?, updated_at=? WHERE id=?",
-                        (len(results), round(len(results) / total * 100, 1), f"scoring {len(results)}/{total}", now_iso(), job_id),
-                    )
-        else:
-            for abs_path, relative_path, public_url in paths:
-                row = score_image(config, checkpoint, abs_path)
-                row["relative_path"] = relative_path
-                row["public_url"] = public_url
-                results.append(row)
-                db_execute(
-                    "UPDATE jobs SET processed_count=?, progress=?, stage=?, updated_at=? WHERE id=?",
-                    (len(results), round(len(results) / total * 100, 1), f"scoring {len(results)}/{total}", now_iso(), job_id),
-                )
-
-        # Batch insert results
-        with db_lock:
-            for row in results:
-                con.execute(
-                    "INSERT INTO results (job_id, image_path, relative_path, public_url, quality_score) VALUES (?, ?, ?, ?, ?)",
-                    (job_id, str(row["image_path"]), str(row.get("relative_path", "")), str(row.get("public_url", "")), float(row["quality_score"])),
-                )
-
-        scores = [float(r["quality_score"]) for r in results]
-        average_score = sum(scores) / len(scores)
-        best_score = max(scores)
-        worst_score = min(scores)
-
-        db_execute(
-            "UPDATE jobs SET status='completed', result_count=?, processed_count=?, progress=100, average_score=?, best_score=?, worst_score=?, completed_at=?, updated_at=?, stage='done' WHERE id=?",
-            (len(results), len(results), average_score, best_score, worst_score, now_iso(), now_iso(), job_id),
-        )
-
-    except Exception as exc:
-        db_execute(
-            """
-            UPDATE jobs
-               SET status = 'failed',
-                   error = ?,
-                   completed_at = ?,
-                   updated_at = ?
-             WHERE id = ?
-            """,
-            (str(exc), now_iso(), now_iso(), job_id),
-        )
-
-
-@app.get("/api/health")
-async def health() -> dict[str, object]:
-    default_name = default_run_name()
-    return {
-        "status": "ok",
-        "port": 6005,
-        "defaultRunName": default_name,
-        "backends": {
-            "python": {
-                "available": True,
-                "label": "Python",
-                "state": "ready",
-                "detail": "PyTorch",
-            },
-            "rust": {
-                "available": True,
-                "label": "Rust",
-                "state": "ready",
-                "detail": "Rust CLI",
-            },
-        },
-    }
-
-
-@app.get("/api/runs")
-async def runs() -> list[str]:
-    checkpoints = REPO / "checkpoints"
-    if not checkpoints.is_dir():
-        return []
-    return sorted(
-        run_dir.name
-        for run_dir in checkpoints.iterdir()
-        if (run_dir / "iqa" / "best.onnx").exists()
-    )
-
-
-@app.post("/api/score/image")
-async def score_image_endpoint(
-    file: UploadFile = File(...),
-    backend: str = Form("python"),
-    device: str = Form("cpu"),
-    runName: str = Form(""),
-) -> dict[str, object]:
-    if not file.filename:
-        raise HTTPException(400, "Missing image file.")
-
-    run_name = runName.strip() or default_run_name()
-    job_id = uuid.uuid4().hex
-    task_dir = f"task_{job_id[:8]}"
-    abs_path, relative_path, public_url = save_upload(file, task_dir)
-    db_execute(
-        """
-        INSERT INTO jobs (
-            id, kind, status, backend, device, run_name, input_count,
-            processed_count, result_count, progress, stage, error, average_score,
-            best_score, worst_score, created_at, updated_at, completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, NULL, NULL, NULL, ?, ?, NULL)
-        """,
-        (
-            job_id,
-            "image",
-            "running",
-            backend,
-            device,
-            run_name,
-            1,
-            "scoring",
-            now_iso(),
-            now_iso(),
-        ),
-    )
-    threading.Thread(
-        target=process_job,
-        args=(job_id, run_name, [(abs_path, relative_path, public_url)], backend, device),
-        daemon=True,
-    ).start()
-    job = db_fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
-    return {"job": {**dict(job or {}), "results": []}}
-
-
-@app.post("/api/score/folder")
-async def score_folder_endpoint(
-    files: list[UploadFile] = File(...),
-    backend: str = Form("python"),
-    device: str = Form("cpu"),
-    runName: str = Form(""),
-) -> dict[str, object]:
-    run_name = runName.strip() or default_run_name()
-    job_id = uuid.uuid4().hex
-    task_dir = f"task_{job_id[:8]}"
-    saved = [save_upload(upload, task_dir) for upload in files if upload.filename]
-    if not saved:
-        raise HTTPException(400, "No images were uploaded.")
-
-    db_execute(
-        """
-        INSERT INTO jobs (
-            id, kind, status, backend, device, run_name, input_count,
-            processed_count, result_count, progress, stage, error, average_score,
-            best_score, worst_score, created_at, updated_at, completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, NULL, NULL, NULL, ?, ?, NULL)
-        """,
-        (
-            job_id,
-            "folder",
-            "running",
-            backend,
-            device,
-            run_name,
-            len(saved),
-            "scoring",
-            now_iso(),
-            now_iso(),
-        ),
-    )
-    threading.Thread(
-        target=process_job,
-        args=(job_id, run_name, saved, backend, device),
-        daemon=True,
-    ).start()
-    job = db_fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
-    return {"job": {**dict(job or {}), "results": []}}
-
-
-@app.get("/api/jobs")
-async def jobs() -> dict[str, object]:
-    rows = db_fetchall("SELECT * FROM jobs ORDER BY created_at DESC")
-    return {"jobs": [dict(row) for row in rows]}
-
-
-@app.get("/api/jobs/{job_id}")
-async def job(job_id: str) -> dict[str, object]:
-    current = db_fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
-    if current is None:
-        raise HTTPException(404, "Job not found.")
-    results = db_fetchall(
-        "SELECT * FROM results WHERE job_id = ? ORDER BY quality_score DESC",
-        (job_id,),
-    )
-    return {"job": {**dict(current), "results": [dict(row) for row in results]}}
-
-
-@app.delete("/api/jobs/{job_id}")
-async def delete_job(job_id: str) -> dict[str, bool]:
-    db_execute("DELETE FROM results WHERE job_id = ?", (job_id,))
-    db_execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-    return {"ok": True}
+@app.on_event("startup")
+async def startup_event() -> None:
+    """应用启动时执行的初始化逻辑。"""
+    print("✅ PV-IQA 后端已启动")
+    print(f"   📁 上传目录: {UPLOAD_ROOT}")
+    print(f"   🔗 API 文档: http://localhost:6005/docs")

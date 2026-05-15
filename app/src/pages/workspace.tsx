@@ -16,7 +16,6 @@ import {
   formatTime,
   qualityLabel,
   statusText,
-  statusVariant,
 } from "@/lib/format"
 import { cn, downloadCsv } from "@/lib/utils"
 import { Disclosure } from "@/components/disclosure"
@@ -52,6 +51,28 @@ import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
+/* ─── Status badge infrared coloring ──────────────────────── */
+function statusBadgeClass(status: string): string {
+  switch (status) {
+    case "completed":
+      return "bg-chart-2/10 text-chart-2 border-chart-2/30"
+    case "running":
+      return "bg-primary/10 text-primary border-primary/40 animate-infrared-pulse"
+    case "failed":
+      return "bg-destructive/10 text-destructive border-destructive/40"
+    case "interrupted":
+      return "bg-chart-4/10 text-chart-4 border-chart-4/30"
+    default:
+      return ""
+  }
+}
+
+/* ─── Section title accent bar (shared) ──────────────────── */
+const sectionAccent = "border-l-[3px] border-primary pl-3"
+
+/* ============================================================
+   UploadDropzone — infrared glow + scan overlay + drag pulse
+   ============================================================ */
 function UploadDropzone({
   dashboard,
   singlePreviewUrl,
@@ -92,18 +113,25 @@ function UploadDropzone({
         }
       }}
       className={cn(
-        "rounded-xl border border-dashed p-4 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        dashboard.isDragging ? "border-primary bg-primary/5" : "border-border bg-muted/10 hover:bg-muted/20",
+        "relative cursor-pointer overflow-hidden rounded-xl border-2 border-dashed p-4 transition-all duration-300 ease-out",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        dashboard.isDragging
+          ? "scale-[1.01] border-primary bg-primary/[0.06] shadow-[0_0_30px_var(--primary)/0.15]"
+          : "border-border hover:border-primary/60 hover:bg-muted/20 hover:infrared-glow",
+        dashboard.isDragging && "animate-infrared-pulse",
         dashboard.isSubmitting && "pointer-events-none opacity-70"
       )}
     >
-      <div className="flex flex-col gap-4">
+      {/* Subtle scan overlay */}
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,var(--primary)/0.03_0%,transparent_50%,var(--primary)/0.03_100%)] rounded-xl" />
+
+      <div className="relative flex flex-col gap-4">
         <div className="flex items-start gap-3">
-          <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-foreground">
-            <UploadCloud aria-hidden="true" className="size-4" />
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
+            <UploadCloud aria-hidden="true" className="size-5" />
           </div>
           <div className="min-w-0">
-            <div className="font-medium">拖拽或点击上传图片</div>
+            <div className="font-semibold text-foreground">拖拽或点击上传图片</div>
             <div className="mt-1 text-sm text-muted-foreground">
               单击选文件 · 拖拽自动识别 · 下方按钮选文件夹
             </div>
@@ -141,19 +169,23 @@ function UploadDropzone({
             </button>
             <div className="min-w-0 rounded-xl border bg-background p-4">
               <div className="truncate text-sm font-medium">{dashboard.singleFile.name}</div>
-              <div className="mt-2 text-sm text-muted-foreground">{compactFileSize(dashboard.singleFile.size)}</div>
+              <div className="mt-2 font-data text-sm text-muted-foreground">
+                {compactFileSize(dashboard.singleFile.size)}
+              </div>
             </div>
           </div>
         ) : (
           <div className="rounded-xl border bg-background p-4">
             <div className="flex items-center justify-between gap-3">
-              <div className="text-sm font-medium">{fileCount} 张已选择</div>
-              <Badge variant="outline">批量</Badge>
+              <div className="text-sm font-medium">
+                <span className="font-data tabular-nums">{fileCount}</span> 张已选择
+              </div>
+              <Badge variant="default">批量</Badge>
             </div>
             {folderPreview.length ? (
               <div className="mt-3 flex flex-col gap-2 text-sm text-muted-foreground">
                 {folderPreview.map((item) => (
-                  <div key={item.relativePath} className="truncate">
+                  <div key={item.relativePath} className="truncate font-data text-xs">
                     {item.relativePath}
                   </div>
                 ))}
@@ -171,6 +203,9 @@ function UploadDropzone({
   )
 }
 
+/* ============================================================
+   PreviewStrip
+   ============================================================ */
 function PreviewStrip({
   results,
   limit = 6,
@@ -189,7 +224,7 @@ function PreviewStrip({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex gap-3 overflow-x-auto pb-2">
+      <div className="custom-scrollbar flex gap-3 overflow-x-auto pb-2">
         {previewItems.map((result) => (
           <button
             key={result.id}
@@ -201,7 +236,7 @@ function PreviewStrip({
                 caption: `${result.relative_path} · ${formatScore(result.quality_score)}`,
               })
             }
-            className="w-52 shrink-0 overflow-hidden rounded-xl border bg-card text-left transition hover:bg-muted/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="w-52 shrink-0 overflow-hidden rounded-xl border bg-card text-left transition-all duration-200 hover:infrared-glow hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <img
               src={result.public_url}
@@ -213,7 +248,7 @@ function PreviewStrip({
             />
             <div className="p-3">
               <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium tabular-nums">{formatScore(result.quality_score)}</div>
+                <div className="stat-value text-sm">{formatScore(result.quality_score)}</div>
                 <Badge variant="secondary">{qualityLabel(result.quality_score, allScores)}</Badge>
               </div>
               <div className="mt-2 truncate text-sm text-muted-foreground">{result.relative_path}</div>
@@ -228,6 +263,9 @@ function PreviewStrip({
   )
 }
 
+/* ============================================================
+   ResultPanelSummary — infrared status badges + progress
+   ============================================================ */
 function ResultPanelSummary({ dashboard }: { dashboard: Dashboard }) {
   const selectedJob = dashboard.selectedJob
 
@@ -236,10 +274,10 @@ function ResultPanelSummary({ dashboard }: { dashboard: Dashboard }) {
   }
 
   return (
-    <div className="mb-5 rounded-xl border bg-muted/10 p-4">
+    <div className="mb-5 rounded-xl border bg-muted/15 p-4 transition-shadow hover:infrared-glow">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="min-w-0">
-          <div className="font-medium">
+          <div className="font-semibold">
             {selectedJob.status === "running"
               ? selectedJob.stage
               : `${statusText(selectedJob.status)} · ${selectedJob.result_count} 条结果`}
@@ -250,10 +288,15 @@ function ResultPanelSummary({ dashboard }: { dashboard: Dashboard }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={statusVariant(selectedJob.status)}>{statusText(selectedJob.status)}</Badge>
+          <Badge
+            variant="outline"
+            className={cn(statusBadgeClass(selectedJob.status), "font-medium")}
+          >
+            {statusText(selectedJob.status)}
+          </Badge>
           <Badge variant="outline">{selectedJob.kind === "image" ? "单图" : "文件夹"}</Badge>
           <Badge variant="outline">{backendText(selectedJob.backend)}</Badge>
-          <Badge variant="outline" className="tabular-nums">
+          <Badge variant="outline" className="tabular-nums font-data">
             {selectedJob.processed_count}/{selectedJob.input_count}
           </Badge>
         </div>
@@ -266,6 +309,9 @@ function ResultPanelSummary({ dashboard }: { dashboard: Dashboard }) {
   )
 }
 
+/* ============================================================
+   ProcessingState
+   ============================================================ */
 function ProcessingState({
   dashboard,
   onPreview,
@@ -298,6 +344,9 @@ function ProcessingState({
   )
 }
 
+/* ============================================================
+   AdvancedOptions
+   ============================================================ */
 function AdvancedOptions({
   dashboard,
   rustBackend,
@@ -308,7 +357,7 @@ function AdvancedOptions({
   const [open, setOpen] = useState(false)
 
   return (
-    <div className="rounded-xl border bg-muted/10">
+    <div className="rounded-xl border bg-muted/10 transition-shadow hover:infrared-glow">
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
@@ -357,6 +406,7 @@ function AdvancedOptions({
                   variant="outline"
                   value={`${dashboard.backend}-${dashboard.device}`}
                   onValueChange={(value) => {
+                    if (!value) return
                     const [b, d] = value.split("-")
                     if (b === "python" || b === "rust") {
                       dashboard.setBackend(b)
@@ -396,12 +446,15 @@ function AdvancedOptions({
   )
 }
 
+/* ============================================================
+   EmptyResult
+   ============================================================ */
 function EmptyResult() {
   return (
     <Empty className="border bg-muted/10">
       <EmptyHeader>
         <EmptyMedia variant="icon">
-          <ImagePlus aria-hidden="true" />
+          <ImagePlus aria-hidden="true" className="text-primary/60" />
         </EmptyMedia>
         <EmptyTitle>等待评分结果</EmptyTitle>
         <EmptyDescription>上传后右侧会显示质量分数、预览与批量结果。</EmptyDescription>
@@ -410,6 +463,9 @@ function EmptyResult() {
   )
 }
 
+/* ============================================================
+   RecentJobs
+   ============================================================ */
 function RecentJobs({ dashboard }: { dashboard: Dashboard }) {
   const recentJobs = dashboard.jobs.slice(0, 4)
 
@@ -432,16 +488,20 @@ function RecentJobs({ dashboard }: { dashboard: Dashboard }) {
           type="button"
           onClick={() => void dashboard.selectJob(job.id)}
           className={cn(
-            "flex flex-col gap-3 rounded-xl border p-4 text-left transition hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            dashboard.selectedJob?.id === job.id && "border-primary bg-primary/5"
+            "flex flex-col gap-3 rounded-xl border p-4 text-left transition-all duration-200",
+            "hover:infrared-glow hover:scale-[1.01] hover:bg-muted/20",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            dashboard.selectedJob?.id === job.id && "border-primary bg-primary/5 shadow-[0_0_16px_var(--primary)/0.08]"
           )}
         >
           <div className="flex items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">{job.kind === "image" ? "单图" : "文件夹"}</Badge>
-              <Badge variant={statusVariant(job.status)}>{statusText(job.status)}</Badge>
+              <Badge variant="outline" className={statusBadgeClass(job.status)}>
+                {statusText(job.status)}
+              </Badge>
             </div>
-            <div className="text-sm font-medium tabular-nums">{formatScore(job.average_score)}</div>
+            <div className="stat-value text-sm">{formatScore(job.average_score)}</div>
           </div>
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">{job.stage}</div>
@@ -453,6 +513,9 @@ function RecentJobs({ dashboard }: { dashboard: Dashboard }) {
   )
 }
 
+/* ============================================================
+   WorkspacePage — main orchestrator
+   ============================================================ */
 export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
@@ -529,197 +592,240 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
       ) : null}
 
       <div className="grid items-start gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <Card className="h-fit xl:sticky xl:top-5 xl:self-start">
-          <CardHeader>
-            <CardTitle>上传与评分</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-5">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={handleFileInputChange}
-            />
-            <input
-              ref={folderInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleFileInputChange}
-            />
-
-            <UploadDropzone
-              dashboard={dashboard}
-              singlePreviewUrl={singlePreviewUrl}
-              onPreview={setPreviewImage}
-              onChoose={() => fileInputRef.current?.click()}
-            />
-
-            <div className="grid grid-cols-2 gap-3">
-              <Button size="lg" onClick={() => void dashboard.submit()} disabled={dashboard.isSubmitting}>
-                {dashboard.isSubmitting ? <><Spinner data-icon="inline-start" />创建任务中…</> : "开始评分"}
-              </Button>
-              <Button variant="outline" size="lg" onClick={() => folderInputRef.current?.click()} disabled={dashboard.isSubmitting}>
-                <FolderOpen aria-hidden="true" data-icon="inline-start" />
-                文件夹
-              </Button>
-            </div>
-
-            <Button variant="ghost" size="sm" onClick={resetUploads} disabled={dashboard.isSubmitting}>
-              清空
-            </Button>
-
-            <AdvancedOptions
-              dashboard={dashboard}
-              rustBackend={rustBackend}
-            />
-          </CardContent>
-        </Card>
-
-        <div className="flex flex-col gap-5">
-          <Card>
+        {/* ═══ LEFT PANEL — Upload & Score ═══ */}
+        <div className="relative animate-fade-in-up" style={{ animationDelay: "0ms" }}>
+          <div className="absolute inset-y-0 left-0 z-10 w-[3px] rounded-full bg-primary/60" />
+          <Card className="h-fit xl:sticky xl:top-5 xl:self-start hover:infrared-glow transition-shadow duration-300">
             <CardHeader>
-              <CardTitle>结果面板</CardTitle>
-              {selectedJob && dashboard.selectedResults.length > 0 ? (
-                <CardAction>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const headers = ["文件名", "相对路径", "质量分数", "评分等级"]
-                      const rows = dashboard.selectedResults.map((r) => [
-                        r.relative_path.split("/").pop() || r.relative_path,
-                        r.relative_path,
-                        r.quality_score.toFixed(2),
-                        qualityLabel(r.quality_score),
-                      ])
-                      downloadCsv(
-                        `pv-iqa-${selectedJob.id.slice(0, 8)}.csv`,
-                        headers,
-                        rows
-                      )
-                    }}
-                  >
-                    <Download aria-hidden="true" data-icon="inline-start" />
-                    导出 CSV
-                  </Button>
-                </CardAction>
-              ) : null}
+              <CardTitle className={sectionAccent}>上传与评分</CardTitle>
             </CardHeader>
-            <CardContent>
-              <ResultPanelSummary dashboard={dashboard} />
-              <AnimatePresence mode="wait">
-                {selectedJob?.status === "running" ? (
-                  <ProcessingState key={selectedJob.id} dashboard={dashboard} onPreview={setPreviewImage} />
-                ) : selectedJob?.kind === "image" && topResult ? (
-                  <motion.div
-                    key={`image-${topResult.id}`}
-                    initial={{ opacity: 0, y: 12 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -12 }}
-                    className="grid gap-6 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]"
-                  >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPreviewImage({
-                          src: topResult.public_url,
-                          alt: topResult.relative_path,
-                          caption: `${topResult.relative_path} · ${formatScore(topResult.quality_score)}`,
-                        })
-                      }
-                      className="overflow-hidden rounded-xl border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            <CardContent className="flex flex-col gap-5">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={handleFileInputChange}
+              />
+              <input
+                ref={folderInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={handleFileInputChange}
+              />
+
+              <UploadDropzone
+                dashboard={dashboard}
+                singlePreviewUrl={singlePreviewUrl}
+                onPreview={setPreviewImage}
+                onChoose={() => fileInputRef.current?.click()}
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <Button
+                  size="lg"
+                  onClick={() => void dashboard.submit()}
+                  disabled={dashboard.isSubmitting}
+                >
+                  {dashboard.isSubmitting ? (
+                    <>
+                      <Spinner data-icon="inline-start" />
+                      创建任务中…
+                    </>
+                  ) : (
+                    "开始评分"
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="lg"
+                  onClick={() => folderInputRef.current?.click()}
+                  disabled={dashboard.isSubmitting}
+                >
+                  <FolderOpen aria-hidden="true" data-icon="inline-start" />
+                  文件夹
+                </Button>
+              </div>
+
+              <Button variant="ghost" size="sm" onClick={resetUploads} disabled={dashboard.isSubmitting}>
+                清空
+              </Button>
+
+              <AdvancedOptions dashboard={dashboard} rustBackend={rustBackend} />
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ═══ RIGHT PANEL — Results ═══ */}
+        <div className="flex flex-col gap-5 animate-fade-in-up" style={{ animationDelay: "100ms" }}>
+          {/* Results card */}
+          <div className="relative">
+            <div className="absolute inset-y-0 left-0 z-10 w-[3px] rounded-full bg-primary/60" />
+            <Card className="hover:infrared-glow transition-shadow duration-300">
+              <CardHeader>
+                <CardTitle className={sectionAccent}>结果面板</CardTitle>
+                {selectedJob && dashboard.selectedResults.length > 0 ? (
+                  <CardAction>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const headers = ["文件名", "相对路径", "质量分数", "评分等级"]
+                        const rows = dashboard.selectedResults.map((r) => [
+                          r.relative_path.split("/").pop() || r.relative_path,
+                          r.relative_path,
+                          r.quality_score.toFixed(2),
+                          qualityLabel(r.quality_score, dashboard.selectedResults.map((sr) => sr.quality_score)),
+                        ])
+                        downloadCsv(
+                          `pv-iqa-${selectedJob.id.slice(0, 8)}.csv`,
+                          headers,
+                          rows
+                        )
+                      }}
                     >
-                      <img
-                        src={topResult.public_url}
-                        alt={topResult.relative_path}
-                        width={360}
-                        height={360}
-                        className="h-80 w-full object-cover transition hover:scale-[1.01]"
-                      />
-                    </button>
-                    <div className="flex flex-col gap-4">
-                      <div>
-                        <div className="text-sm text-muted-foreground">质量分数</div>
-                        <div className="mt-2 flex items-center gap-3">
-                          <div className="text-4xl font-semibold tabular-nums">{formatScore(topResult.quality_score)}</div>
-                          <Badge variant="secondary">{qualityLabel(topResult.quality_score)}</Badge>
+                      <Download aria-hidden="true" data-icon="inline-start" />
+                      导出 CSV
+                    </Button>
+                  </CardAction>
+                ) : null}
+              </CardHeader>
+              <CardContent>
+                <ResultPanelSummary dashboard={dashboard} />
+                <AnimatePresence mode="wait">
+                  {selectedJob?.status === "running" ? (
+                    <ProcessingState key={selectedJob.id} dashboard={dashboard} onPreview={setPreviewImage} />
+                  ) : selectedJob?.kind === "image" && topResult ? (
+                    <motion.div
+                      key={`image-${topResult.id}`}
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -12 }}
+                      className="grid gap-6 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]"
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewImage({
+                            src: topResult.public_url,
+                            alt: topResult.relative_path,
+                            caption: `${topResult.relative_path} · ${formatScore(topResult.quality_score)}`,
+                          })
+                        }
+                        className="overflow-hidden rounded-xl border bg-card transition-shadow hover:infrared-glow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <img
+                          src={topResult.public_url}
+                          alt={topResult.relative_path}
+                          width={360}
+                          height={360}
+                          className="h-80 w-full object-cover transition hover:scale-[1.02]"
+                        />
+                      </button>
+                      <div className="flex flex-col gap-4">
+                        <div>
+                          <div className="text-sm text-muted-foreground">质量分数</div>
+                          <div className="mt-2 flex items-center gap-3">
+                            <div className="stat-value text-4xl">{formatScore(topResult.quality_score)}</div>
+                            <Badge variant="secondary">
+                              {qualityLabel(topResult.quality_score, dashboard.selectedResults.map((r) => r.quality_score))}
+                            </Badge>
+                          </div>
+                        </div>
+
+                        <Progress value={clampPercentage(topResult.quality_score)} className="h-2" />
+
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <StatCard label="完成时间" value={formatTime(selectedJob.completed_at)} />
+                          <StatCard label="文件名" value={topResult.relative_path} />
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : selectedJob?.kind === "folder" && dashboard.selectedResults.length ? (
+                    <motion.div
+                      key={`folder-${selectedJob.id}`}
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -12 }}
+                      className="flex flex-col gap-5"
+                    >
+                      {/* Stat cards with staggered animation */}
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <div className="animate-fade-in-up" style={{ animationDelay: "0ms" }}>
+                          <StatCard
+                            label="平均分"
+                            value={formatScore(selectedJob.average_score)}
+                            hint="整批图像平均质量"
+                          />
+                        </div>
+                        <div className="animate-fade-in-up" style={{ animationDelay: "80ms" }}>
+                          <StatCard
+                            label="最高分"
+                            value={formatScore(selectedJob.best_score)}
+                            hint="当前最佳样本"
+                          />
+                        </div>
+                        <div className="animate-fade-in-up" style={{ animationDelay: "160ms" }}>
+                          <StatCard
+                            label="结果数量"
+                            value={String(dashboard.selectedResults.length)}
+                            hint={selectedJob.completed_at ? formatTime(selectedJob.completed_at) : "等待完成"}
+                          />
                         </div>
                       </div>
 
-                      <Progress value={clampPercentage(topResult.quality_score)} className="h-2" />
+                      <PreviewStrip results={dashboard.selectedResults} onPreview={setPreviewImage} />
 
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <StatCard label="完成时间" value={formatTime(selectedJob.completed_at)} />
-                        <StatCard label="文件名" value={topResult.relative_path} />
+                      <div>
+                        <Button asChild variant="outline">
+                          <Link to="/jobs">
+                            <ListFilter aria-hidden="true" data-icon="inline-start" />
+                            查看完整结果
+                          </Link>
+                        </Button>
                       </div>
-                    </div>
-                  </motion.div>
-                ) : selectedJob?.kind === "folder" && dashboard.selectedResults.length ? (
-                  <motion.div
-                    key={`folder-${selectedJob.id}`}
-                    initial={{ opacity: 0, y: 12 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -12 }}
-                    className="flex flex-col gap-5"
-                  >
-                    <div className="grid gap-3 md:grid-cols-3">
-                      <StatCard label="平均分" value={formatScore(selectedJob.average_score)} hint="整批图像平均质量" />
-                      <StatCard label="最高分" value={formatScore(selectedJob.best_score)} hint="当前最佳样本" />
-                      <StatCard
-                        label="结果数量"
-                        value={String(dashboard.selectedResults.length)}
-                        hint={selectedJob.completed_at ? formatTime(selectedJob.completed_at) : "等待完成"}
-                      />
-                    </div>
+                    </motion.div>
+                  ) : (
+                    <EmptyResult key="empty-result" />
+                  )}
+                </AnimatePresence>
+              </CardContent>
+            </Card>
+          </div>
 
-                    <PreviewStrip results={dashboard.selectedResults} onPreview={setPreviewImage} />
-
-                    <div>
-                      <Button asChild variant="outline">
-                        <Link to="/jobs">
-                          <ListFilter aria-hidden="true" data-icon="inline-start" />
-                          查看完整结果
-                        </Link>
-                      </Button>
-                    </div>
-                  </motion.div>
-                ) : (
-                  <EmptyResult key="empty-result" />
-                )}
-              </AnimatePresence>
-            </CardContent>
-          </Card>
-
+          {/* ═══ Charts section ═══ */}
           {selectedJob?.kind === "folder" && dashboard.selectedResults.length ? (
-            <Disclosure
-              title="展开质量分析"
-              description="仅展示当前任务的分布与排序分析。"
-            >
-              <div className="flex flex-col gap-4">
-                <div className="grid gap-4 xl:grid-cols-2">
-                  <ScoreDistributionChart
-                    data={selectedDistribution}
-                    title="质量分布"
-                    description="按好 / 中 / 差统计当前任务。"
-                  />
-                  <RankedScoreChart
-                    data={selectedRankedScores}
-                    title="排序曲线"
-                    description="按得分从高到低查看质量衰减趋势。"
-                  />
+            <div className="animate-fade-in-up" style={{ animationDelay: "200ms" }}>
+              <Disclosure
+                title="展开质量分析"
+                description="仅展示当前任务的分布与排序分析。"
+              >
+                <div className="flex flex-col gap-4">
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <ScoreDistributionChart
+                      data={selectedDistribution}
+                      title="质量分布"
+                      description="按好 / 中 / 差统计当前任务。"
+                    />
+                    <RankedScoreChart
+                      data={selectedRankedScores}
+                      title="排序曲线"
+                      description="按得分从高到低查看质量衰减趋势。"
+                    />
+                  </div>
                 </div>
-              </div>
-            </Disclosure>
+              </Disclosure>
+            </div>
           ) : null}
 
-          <Disclosure
-            title="展开最近任务"
-          >
-            <RecentJobs dashboard={dashboard} />
-          </Disclosure>
+          {/* ═══ Recent jobs section ═══ */}
+          <div className="animate-fade-in-up" style={{ animationDelay: "300ms" }}>
+            <Disclosure title="展开最近任务">
+              <RecentJobs dashboard={dashboard} />
+            </Disclosure>
+          </div>
         </div>
       </div>
 

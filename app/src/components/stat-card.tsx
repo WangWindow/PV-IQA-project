@@ -18,16 +18,29 @@ export function StatCard({
   return (
     <div
       className={cn(
-        "rounded-xl border bg-muted/10 p-3.5",
+        "group relative rounded-xl border border-border bg-card p-4",
+        "transition-all duration-300 ease-out",
+        "hover:scale-[1.01] hover:infrared-glow",
         className
       )}
     >
-      <div className="flex items-center justify-between gap-3">
+      {/* Top row: label + icon */}
+      <div className="flex items-start justify-between gap-3">
         <div className="text-sm text-muted-foreground">{label}</div>
-        {icon ? <div className="text-muted-foreground">{icon}</div> : null}
+        {icon ? (
+          <div className="shrink-0 text-primary/80 transition-colors duration-300 group-hover:text-primary">
+            {icon}
+          </div>
+        ) : null}
       </div>
-      <div className="mt-2 break-words text-xl font-semibold tracking-tight tabular-nums">{value}</div>
-      {hint ? <div className="mt-2 text-sm text-muted-foreground">{hint}</div> : null}
+
+      {/* Value */}
+      <div className="stat-value mt-2 break-words text-xl">{value}</div>
+
+      {/* Hint */}
+      {hint ? (
+        <div className="mt-2 text-sm text-muted-foreground">{hint}</div>
+      ) : null}
     </div>
   )
 }
