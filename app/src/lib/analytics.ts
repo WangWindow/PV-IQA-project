@@ -80,8 +80,8 @@ export function buildScoreDistribution(results: ScoreResult[]): ScoreBandPoint[]
   })
 }
 
-export function buildRankedScoreData(results: ScoreResult[], limit = 24): RankedScorePoint[] {
-  return results.slice(0, limit).map((result, index) => ({
+export function buildRankedScoreData(results: ScoreResult[]): RankedScorePoint[] {
+  return results.map((result, index) => ({
     rank: index + 1,
     score: result.quality_score,
     label: result.relative_path,

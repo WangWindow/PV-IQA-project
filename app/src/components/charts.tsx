@@ -52,7 +52,7 @@ export function JobTrendChart({
   description: string
 }) {
   return (
-    <Card className="group overflow-hidden border-border bg-card transition-all duration-300 hover:infrared-glow">
+    <Card className="group overflow-hidden border-border bg-card transition-all duration-300 hover:border-primary/30 hover:shadow-md">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
@@ -124,7 +124,7 @@ export function ScoreDistributionChart({
   description: string
 }) {
   return (
-    <Card className="group overflow-hidden border-border bg-card transition-all duration-300 hover:infrared-glow">
+    <Card className="group overflow-hidden border-border bg-card transition-all duration-300 hover:border-primary/30 hover:shadow-md">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
@@ -186,7 +186,7 @@ export function RankedScoreChart({
   description: string
 }) {
   return (
-    <Card className="group overflow-hidden border-border bg-card transition-all duration-300 hover:infrared-glow">
+    <Card className="group overflow-hidden border-border bg-card transition-all duration-300 hover:border-primary/30 hover:shadow-md">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         <CardDescription>{description}</CardDescription>

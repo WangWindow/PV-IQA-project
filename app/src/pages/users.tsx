@@ -122,7 +122,7 @@ export function UsersPage() {
         </Alert>
       )}
 
-      <Card className="transition-shadow duration-300 hover:infrared-glow animate-fade-in-up" style={{ animationDelay: "50ms" }}>
+      <Card className="transition-shadow duration-300 hover:shadow-md animate-fade-in-up" style={{ animationDelay: "50ms" }}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <UsersIcon className="size-4 text-primary" />
@@ -162,7 +162,7 @@ export function UsersPage() {
                     <TableCell className="font-medium">{u.username}</TableCell>
                     <TableCell>
                       {u.role === "admin" ? (
-                        <Badge className="gap-1 infrared-glow">
+                        <Badge className="gap-1">
                           <Shield className="size-3" />
                           管理员
                         </Badge>
@@ -212,7 +212,7 @@ export function UsersPage() {
 
       {/* 创建用户对话框 */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-md infrared-glow">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <UsersIcon className="size-4 text-primary" />

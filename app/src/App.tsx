@@ -5,6 +5,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom"
 import { AuthProvider, useAuth } from "@/hooks/use-auth"
 import { AppShell } from "@/components/app-shell"
 import { useDashboard } from "@/hooks/use-dashboard"
+import { useNotifications } from "@/hooks/use-notifications"
 import { Spinner } from "@/components/ui/spinner"
 
 const WorkspacePage = lazy(async () => {
@@ -79,6 +80,10 @@ function RequireAdmin({ children }: { children: ReactNode }) {
 function AppRoutes() {
   const dashboard = useDashboard()
   const location = useLocation()
+  const { requestPermission: requestNotificationPermission } = useNotifications({
+    jobs: dashboard.jobs,
+    selectedJob: dashboard.selectedJob,
+  })
 
   return (
     <AnimatePresence mode="wait">
@@ -92,9 +97,9 @@ function AppRoutes() {
           path="/workspace"
           element={
             <RequireAuth>
-              <AppShell dashboard={dashboard}>
+              <AppShell dashboard={dashboard} requestNotificationPermission={requestNotificationPermission}>
                 <Suspense fallback={<SuspenseFallback />}>
-                  <WorkspacePage dashboard={dashboard} />
+                  <WorkspacePage dashboard={dashboard} requestNotificationPermission={requestNotificationPermission} />
                 </Suspense>
               </AppShell>
             </RequireAuth>

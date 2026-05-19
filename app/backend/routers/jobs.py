@@ -186,11 +186,140 @@ async def batch_delete_jobs(body: dict[str, list[str]], user: dict = Depends(req
     return {"ok": True, "deleted": deleted}
 
 
+@router.post("/batch-rerun")
+async def batch_rerun_jobs(body: dict[str, list[str]], user: dict = Depends(require_auth)) -> dict[str, object]:
+    job_ids = body.get("job_ids", [])
+    if not job_ids:
+        raise JobError("未提供要重跑的任务 ID", code="JOB_IDS_EMPTY")
+
+    rerun_count = 0
+    for job_id in job_ids:
+        current = db_fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
+        if current is None:
+            continue
+        job_data = dict(current)
+        if user.get("role") != "admin" and job_data.get("user_id") != user["id"]:
+            continue
+
+        db_execute("DELETE FROM results WHERE job_id = ?", (job_id,))
+        db_execute(
+            """
+            UPDATE jobs
+               SET status='running',
+                   processed_count=0,
+                   result_count=0,
+                   progress=0,
+                   stage='scoring',
+                   error=NULL,
+                   average_score=NULL,
+                   best_score=NULL,
+                   worst_score=NULL,
+                   completed_at=NULL,
+                   updated_at=?
+             WHERE id=?
+            """,
+            (now_iso(), job_id),
+        )
+        rerun_count += 1
+    return {"ok": True, "rerun_count": rerun_count}
+
+
+@router.put("/{job_id}/tags")
+async def update_job_tags(job_id: str, body: dict[str, list[str]], user: dict = Depends(require_auth)) -> dict[str, object]:
+    current = db_fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
+    if current is None:
+        raise JobError("任务不存在", code="JOB_NOT_FOUND")
+    job_data = dict(current)
+    if user.get("role") != "admin" and job_data.get("user_id") != user["id"]:
+        raise ForbiddenError("无权操作此任务")
+
+    import json
+    tags = body.get("tags", [])
+    db_execute("UPDATE jobs SET tags=?, updated_at=? WHERE id=?", (json.dumps(tags), now_iso(), job_id))
+    return {"ok": True, "tags": tags}
+
+
+@router.put("/{job_id}/notes")
+async def update_job_notes(job_id: str, body: dict[str, str], user: dict = Depends(require_auth)) -> dict[str, object]:
+    current = db_fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
+    if current is None:
+        raise JobError("任务不存在", code="JOB_NOT_FOUND")
+    job_data = dict(current)
+    if user.get("role") != "admin" and job_data.get("user_id") != user["id"]:
+        raise ForbiddenError("无权操作此任务")
+
+    notes = body.get("notes", "")
+    db_execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?", (notes, now_iso(), job_id))
+    return {"ok": True, "notes": notes}
+
+
+@router.put("/{job_id}/priority")
+async def update_job_priority(job_id: str, body: dict[str, int], user: dict = Depends(require_auth)) -> dict[str, object]:
+    current = db_fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
+    if current is None:
+        raise JobError("任务不存在", code="JOB_NOT_FOUND")
+    job_data = dict(current)
+    if user.get("role") != "admin" and job_data.get("user_id") != user["id"]:
+        raise ForbiddenError("无权操作此任务")
+
+    priority = body.get("priority", 0)
+    db_execute("UPDATE jobs SET priority=?, updated_at=? WHERE id=?", (priority, now_iso(), job_id))
+    return {"ok": True, "priority": priority}
+
+
+@router.post("/archive")
+async def archive_old_jobs(body: dict[str, int] | None = None, user: dict = Depends(require_auth)) -> dict[str, object]:
+    days = body.get("days", 30) if body else 30
+    cutoff_dt = datetime.now(tz=timezone.utc) - timedelta(days=days)
+    cutoff_str = cutoff_dt.isoformat()
+
+    if user.get("role") == "admin":
+        count_row = db_fetchone(
+            "SELECT COUNT(*) as count FROM jobs WHERE status IN ('completed', 'failed', 'interrupted') AND completed_at < ?",
+            (cutoff_str,),
+        )
+        db_execute(
+            "DELETE FROM results WHERE job_id IN (SELECT id FROM jobs WHERE status IN ('completed', 'failed', 'interrupted') AND completed_at < ?)",
+            (cutoff_str,),
+        )
+        db_execute(
+            "DELETE FROM jobs WHERE status IN ('completed', 'failed', 'interrupted') AND completed_at < ?",
+            (cutoff_str,),
+        )
+    else:
+        count_row = db_fetchone(
+            "SELECT COUNT(*) as count FROM jobs WHERE user_id = ? AND status IN ('completed', 'failed', 'interrupted') AND completed_at < ?",
+            (user["id"], cutoff_str),
+        )
+        db_execute(
+            "DELETE FROM results WHERE job_id IN (SELECT id FROM jobs WHERE user_id = ? AND status IN ('completed', 'failed', 'interrupted') AND completed_at < ?)",
+            (user["id"], cutoff_str),
+        )
+        db_execute(
+            "DELETE FROM jobs WHERE user_id = ? AND status IN ('completed', 'failed', 'interrupted') AND completed_at < ?",
+            (user["id"], cutoff_str),
+        )
+
+    count = dict(count_row or {}).get("count", 0) if count_row else 0
+    return {"ok": True, "archived": count, "cutoff_days": days}
+
+
+@router.get("/export")
+async def export_jobs(user: dict = Depends(require_auth)) -> dict[str, object]:
+    if user.get("role") == "admin":
+        rows = db_fetchall("SELECT * FROM jobs ORDER BY created_at DESC")
+    else:
+        rows = db_fetchall(
+            "SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC",
+            (user["id"],),
+        )
+    return {"jobs": [dict(row) for row in rows]}
+
+
 @router.post("/cleanup")
 async def cleanup_jobs(admin: dict = Depends(require_admin)) -> dict[str, object]:
     """清理指定天数前已完成的任务（仅管理员）。"""
     days = 30
-    # 从查询参数获取天数（简化处理）
     cutoff_dt = datetime.now(tz=timezone.utc) - timedelta(days=days)
     cutoff_str = cutoff_dt.isoformat()
 

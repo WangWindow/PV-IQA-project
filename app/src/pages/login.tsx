@@ -5,61 +5,7 @@ import { Eye, EyeOff } from "lucide-react"
 import { useAuth } from "@/hooks/use-auth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-
-function PalmVeinLogo() {
-  return (
-    <svg
-      viewBox="0 0 48 48"
-      className="size-12 text-primary"
-      fill="none"
-      stroke="currentColor"
-    >
-      {/* Outer ring — palm boundary */}
-      <circle cx="24" cy="24" r="20" strokeWidth="1.2" opacity="0.35" />
-      {/* Scanning circle — NIR illumination area */}
-      <circle cx="24" cy="24" r="14" strokeWidth="1" opacity="0.55" />
-      {/* Vein pattern arcs */}
-      <path
-        d="M17 15 Q23 20 19 26 Q16 30 22 34"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-      />
-      <path
-        d="M27 14 Q31 18 29 24 Q27 30 33 34"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-      />
-      <path
-        d="M13 22 Q17 24 19 28"
-        strokeWidth="0.9"
-        strokeLinecap="round"
-        opacity="0.7"
-      />
-      <path
-        d="M35 20 Q31 24 29 28"
-        strokeWidth="0.9"
-        strokeLinecap="round"
-        opacity="0.7"
-      />
-      {/* Center scan dot */}
-      <circle cx="24" cy="24" r="2.5" fill="currentColor" stroke="none" opacity="0.85" />
-      {/* Dashed scan ring */}
-      <circle
-        cx="24"
-        cy="24"
-        r="5"
-        strokeWidth="0.6"
-        opacity="0.3"
-        strokeDasharray="3 2"
-      />
-      {/* Scan crosshairs */}
-      <path d="M24 5v4" strokeWidth="0.6" opacity="0.25" />
-      <path d="M24 39v4" strokeWidth="0.6" opacity="0.25" />
-      <path d="M5 24h4" strokeWidth="0.6" opacity="0.25" />
-      <path d="M39 24h4" strokeWidth="0.6" opacity="0.25" />
-    </svg>
-  )
-}
+import { Logo } from "@/components/logo"
 
 export function LoginPage() {
   const { login } = useAuth()
@@ -105,7 +51,7 @@ export function LoginPage() {
           {/* Logo + Title */}
           <div className="mb-8 text-center">
             <div className="mx-auto mb-5 flex size-16 items-center justify-center rounded-2xl bg-card/80 border border-border/60 shadow-sm animate-infrared-pulse">
-              <PalmVeinLogo />
+              <Logo size={48} className="text-primary" />
             </div>
             <h1 className="text-2xl font-semibold tracking-tight text-infrared-gradient">
               掌静脉 IQA
@@ -116,7 +62,7 @@ export function LoginPage() {
           </div>
 
           {/* Auth Card */}
-          <div className="infrared-glow rounded-xl border border-border bg-card px-6 pb-6 pt-5 shadow-lg">
+          <div className="rounded-xl border border-border bg-card px-6 pb-6 pt-5 shadow-lg">
             {/* Success banner */}
             {registered && (
               <div className="mb-5 rounded-lg border border-emerald-500/30 bg-emerald-50 px-3.5 py-2.5 text-sm font-medium text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/40 dark:text-emerald-300">
@@ -184,6 +130,7 @@ export function LoginPage() {
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                     onClick={() => setShowPassword((v) => !v)}
                     tabIndex={-1}
+                    aria-label={showPassword ? "隐藏密码" : "显示密码"}
                   >
                     {showPassword ? (
                       <EyeOff className="size-4" />

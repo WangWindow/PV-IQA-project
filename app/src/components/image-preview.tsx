@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useState } from "react"
-import { BarChart3, FileImage, Info, Loader2 } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  BarChart3,
+  FileImage,
+  Info,
+  Loader2,
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react"
 
 import type { ImageMetadata } from "@/lib/types"
 import { fetchImageMetadata } from "@/lib/api"
@@ -17,7 +25,6 @@ export type PreviewImage = {
   caption?: string
 }
 
-/** 将亮度值映射为文字标签 */
 function brightnessLabel(value: number | null): string {
   if (value === null) return "—"
   if (value > 180) return "偏亮"
@@ -25,7 +32,6 @@ function brightnessLabel(value: number | null): string {
   return "适中"
 }
 
-/** 将对比度值映射为文字标签 */
 function contrastLabel(value: number | null): string {
   if (value === null) return "—"
   if (value > 80) return "高对比"
@@ -33,7 +39,6 @@ function contrastLabel(value: number | null): string {
   return "适中"
 }
 
-/** 将信噪比映射为文字标签 */
 function snrLabel(value: number | null): string {
   if (value === null) return "—"
   if (value > 5) return "高信噪比"
@@ -41,7 +46,6 @@ function snrLabel(value: number | null): string {
   return "低信噪比"
 }
 
-/** 指标状态：优良(绿) / 警告(琥珀) / 超标(红) */
 type MetricStatus = "good" | "warn" | "bad"
 
 function brightnessStatus(value: number | null): MetricStatus {
@@ -82,9 +86,7 @@ function MetricBar({
   status: MetricStatus
   detail: string
 }) {
-  // Normalize value for bar width (brightness 0-255, contrast 0-100, SNR 0-10)
   const normalized = status === "bad" ? 100 : status === "warn" ? 50 : 30
-
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs">
@@ -102,11 +104,8 @@ function MetricBar({
   )
 }
 
-/** 颜色通道直方图迷你柱状图 */
 function MiniHistogram({ data, color, label }: { data: number[]; color: string; label: string }) {
   if (!data || data.length === 0) return null
-
-  // 降采样到最多 32 档以保持渲染性能
   const bins = Math.min(data.length, 32)
   const binSize = Math.ceil(data.length / bins)
   const sampled = Array.from({ length: bins }, (_, i) => {
@@ -114,7 +113,6 @@ function MiniHistogram({ data, color, label }: { data: number[]; color: string; 
     const slice = data.slice(start, start + binSize)
     return slice.reduce((a, b) => a + b, 0) / slice.length
   })
-
   const max = Math.max(...sampled, 1)
 
   return (
@@ -140,6 +138,119 @@ function MiniHistogram({ data, color, label }: { data: number[]; color: string; 
   )
 }
 
+function ZoomableImage({ src, alt }: { src: string; alt: string }) {
+  const [scale, setScale] = useState(1)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [dragging, setDragging] = useState(false)
+  const dragStart = useRef({ x: 0, y: 0, offsetX: 0, offsetY: 0 })
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const reset = useCallback(() => {
+    setScale(1)
+    setOffset({ x: 0, y: 0 })
+  }, [])
+
+  const zoomIn = useCallback(() => setScale((s) => Math.min(s * 1.25, 8)), [])
+  const zoomOut = useCallback(() => setScale((s) => Math.max(s / 1.25, 0.5)), [])
+
+  useEffect(() => {
+    function onWheel(e: WheelEvent) {
+      if (!containerRef.current?.contains(e.target as Node)) return
+      e.preventDefault()
+      const delta = e.deltaY > 0 ? 0.9 : 1.1
+      setScale((s) => Math.min(Math.max(s * delta, 0.5), 8))
+    }
+    window.addEventListener("wheel", onWheel, { passive: false })
+    return () => window.removeEventListener("wheel", onWheel)
+  }, [])
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "=" || e.key === "+") zoomIn()
+      if (e.key === "-" || e.key === "_") zoomOut()
+      if (e.key === "0") reset()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [zoomIn, zoomOut, reset])
+
+  function onMouseDown(e: React.MouseEvent) {
+    if (scale <= 1) return
+    setDragging(true)
+    dragStart.current = {
+      x: e.clientX,
+      y: e.clientY,
+      offsetX: offset.x,
+      offsetY: offset.y,
+    }
+  }
+
+  function onMouseMove(e: React.MouseEvent) {
+    if (!dragging) return
+    setOffset({
+      x: dragStart.current.offsetX + (e.clientX - dragStart.current.x),
+      y: dragStart.current.offsetY + (e.clientY - dragStart.current.y),
+    })
+  }
+
+  function onMouseUp() {
+    setDragging(false)
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-muted/20 select-none"
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseUp}
+    >
+      <img
+        src={src}
+        alt={alt}
+        draggable={false}
+        className="block max-h-full max-w-full object-contain transition-transform duration-75"
+        style={{
+          transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+          cursor: scale > 1 ? (dragging ? "grabbing" : "grab") : "zoom-in",
+        }}
+      />
+
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-lg border border-border/60 bg-background/90 p-1 shadow-lg backdrop-blur">
+        <button
+          type="button"
+          onClick={zoomOut}
+          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label="缩小"
+        >
+          <ZoomOut className="size-4" />
+        </button>
+        <span className="min-w-[3ch] px-1 text-center text-xs font-medium tabular-nums">
+          {Math.round(scale * 100)}%
+        </span>
+        <button
+          type="button"
+          onClick={zoomIn}
+          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label="放大"
+        >
+          <ZoomIn className="size-4" />
+        </button>
+        <div className="mx-1 h-4 w-px bg-border" />
+        <button
+          type="button"
+          onClick={reset}
+          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label="重置缩放"
+        >
+          <RotateCcw className="size-4" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function ImagePreview({
   image,
   onOpenChange,
@@ -151,7 +262,6 @@ export function ImagePreview({
   const [loadingMeta, setLoadingMeta] = useState(false)
   const [showMeta, setShowMeta] = useState(false)
 
-  // 打开时获取元数据
   const loadMetadata = useCallback(async () => {
     if (!image?.src) return
     setLoadingMeta(true)
@@ -171,17 +281,20 @@ export function ImagePreview({
     }
   }, [image, showMeta, loadMetadata])
 
+  useEffect(() => {
+    if (!image) {
+      setShowMeta(false)
+      setMetadata(null)
+    }
+  }, [image])
+
   return (
     <Dialog open={Boolean(image)} onOpenChange={onOpenChange}>
       <DialogContent
-        className="relative overflow-hidden border-border/60 bg-background/96 p-0 shadow-2xl backdrop-blur-xl sm:max-w-5xl"
+        className="flex flex-col gap-0 w-[96vw] h-[92vh] max-w-none sm:max-w-5xl overflow-hidden border-border/60 bg-background/96 p-0 shadow-2xl backdrop-blur-xl"
         showCloseButton={false}
       >
-        {/* Scan overlay */}
-        <div className="scan-overlay absolute inset-0 z-10 pointer-events-none" />
-
-        {/* Header */}
-        <div className="relative z-20 flex items-center justify-between gap-4 border-b border-border/60 px-5 py-3.5">
+        <div className="relative z-20 flex shrink-0 items-center justify-between gap-4 border-b border-border/60 px-5 py-3">
           <div className="min-w-0">
             <DialogTitle className="truncate text-base font-semibold">
               {image?.alt ?? "图片预览"}
@@ -214,28 +327,13 @@ export function ImagePreview({
         </div>
 
         {image ? (
-          <div className="relative z-20 flex flex-col lg:flex-row">
-            {/* 图片预览区域 — 左侧 */}
-            <div
-              className={cn(
-                "flex items-center justify-center bg-muted/20 p-4",
-                showMeta ? "lg:w-[65%]" : "w-full"
-              )}
-            >
-              <img
-                src={image.src}
-                alt={image.alt}
-                className={cn(
-                  "max-h-[65vh] w-full rounded-lg object-contain",
-                  !showMeta && "max-h-[75vh]"
-                )}
-              />
+          <div className="relative z-20 flex flex-1 min-h-0 flex-col lg:flex-row overflow-hidden">
+            <div className={cn("flex flex-1 min-h-0 flex-col", showMeta ? "lg:w-[65%]" : "w-full")}>
+              <ZoomableImage src={image.src} alt={image.alt} />
             </div>
 
-            {/* 元数据侧边面板 — 右侧 */}
             {showMeta ? (
-              <div className="flex w-full flex-col gap-4 overflow-y-auto border-l border-border/60 bg-card/50 p-4 lg:w-[35%] custom-scrollbar animate-fade-in-up">
-                {/* 基础信息 */}
+              <div className="flex min-h-0 w-full flex-col gap-4 overflow-y-auto border-t lg:border-t-0 lg:border-l border-border/60 bg-card/50 p-4 lg:w-[35%] custom-scrollbar">
                 <section className="space-y-2.5">
                   <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-primary">
                     <FileImage className="size-3.5" />
@@ -245,27 +343,18 @@ export function ImagePreview({
                     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
                       <dt className="text-muted-foreground">文件名</dt>
                       <dd className="font-medium truncate font-data">{metadata.filename}</dd>
-
                       <dt className="text-muted-foreground">格式</dt>
                       <dd className="font-data">{metadata.format ?? "—"}</dd>
-
                       <dt className="text-muted-foreground">大小</dt>
                       <dd className="font-data">{metadata.size_human}</dd>
-
                       <dt className="text-muted-foreground">尺寸</dt>
-                      <dd className="stat-value text-xs">
-                        {metadata.width} × {metadata.height}
-                      </dd>
-
+                      <dd className="stat-value text-xs">{metadata.width} × {metadata.height}</dd>
                       {metadata.dpi && (
                         <>
                           <dt className="text-muted-foreground">DPI</dt>
-                          <dd className="font-data">
-                            {metadata.dpi[0].toFixed(0)} × {metadata.dpi[1].toFixed(0)}
-                          </dd>
+                          <dd className="font-data">{metadata.dpi[0].toFixed(0)} × {metadata.dpi[1].toFixed(0)}</dd>
                         </>
                       )}
-
                       {metadata.mode && (
                         <>
                           <dt className="text-muted-foreground">色彩</dt>
@@ -283,7 +372,6 @@ export function ImagePreview({
                   )}
                 </section>
 
-                {/* 光学指标 */}
                 {metadata ? (
                   <section className="space-y-2.5">
                     <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-primary">
@@ -313,7 +401,6 @@ export function ImagePreview({
                   </section>
                 ) : null}
 
-                {/* 颜色直方图 */}
                 {metadata?.histogram ? (
                   <section className="space-y-2.5">
                     <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-primary">
@@ -321,26 +408,10 @@ export function ImagePreview({
                       颜色直方图
                     </div>
                     <div className="space-y-2.5">
-                      <MiniHistogram
-                        data={metadata.histogram.r}
-                        color="var(--primary)"
-                        label="红色通道"
-                      />
-                      <MiniHistogram
-                        data={metadata.histogram.g}
-                        color="var(--chart-2)"
-                        label="绿色通道"
-                      />
-                      <MiniHistogram
-                        data={metadata.histogram.b}
-                        color="var(--chart-4)"
-                        label="蓝色通道"
-                      />
-                      <MiniHistogram
-                        data={metadata.histogram.luminance}
-                        color="var(--muted-foreground)"
-                        label="亮度"
-                      />
+                      <MiniHistogram data={metadata.histogram.r} color="var(--primary)" label="红色通道" />
+                      <MiniHistogram data={metadata.histogram.g} color="var(--chart-2)" label="绿色通道" />
+                      <MiniHistogram data={metadata.histogram.b} color="var(--chart-4)" label="蓝色通道" />
+                      <MiniHistogram data={metadata.histogram.luminance} color="var(--muted-foreground)" label="亮度" />
                     </div>
                   </section>
                 ) : null}

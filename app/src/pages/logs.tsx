@@ -159,7 +159,7 @@ export function LogsPage() {
       </Card>
 
       {/* 日志表格 */}
-      <Card className="animate-fade-in-up transition-shadow duration-300 hover:infrared-glow" style={{ animationDelay: "100ms" }}>
+      <Card className="animate-fade-in-up transition-shadow duration-300 hover:shadow-md" style={{ animationDelay: "100ms" }}>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">审计日志</CardTitle>
           <CardDescription>

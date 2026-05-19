@@ -116,7 +116,7 @@ function UploadDropzone({
         "relative cursor-pointer overflow-hidden rounded-xl border-2 border-dashed p-4 transition-all duration-300 ease-out",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         dashboard.isDragging
-          ? "scale-[1.01] border-primary bg-primary/[0.06] shadow-[0_0_30px_var(--primary)/0.15]"
+          ? "scale-[1.01] border-primary bg-primary/6 shadow-[0_0_30px_var(--primary)/0.15]"
           : "border-border hover:border-primary/60 hover:bg-muted/20 hover:infrared-glow",
         dashboard.isDragging && "animate-infrared-pulse",
         dashboard.isSubmitting && "pointer-events-none opacity-70"
@@ -236,7 +236,7 @@ function PreviewStrip({
                 caption: `${result.relative_path} · ${formatScore(result.quality_score)}`,
               })
             }
-            className="w-52 shrink-0 overflow-hidden rounded-xl border bg-card text-left transition-all duration-200 hover:infrared-glow hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="w-52 shrink-0 overflow-hidden rounded-xl border bg-card text-left transition-all duration-200 hover:border-primary/50 hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <img
               src={result.public_url}
@@ -274,7 +274,7 @@ function ResultPanelSummary({ dashboard }: { dashboard: Dashboard }) {
   }
 
   return (
-    <div className="mb-5 rounded-xl border bg-muted/15 p-4 transition-shadow hover:infrared-glow">
+    <div className="mb-5 rounded-xl border bg-muted/15 p-4 transition-shadow hover:border-primary/30">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="min-w-0">
           <div className="font-semibold">
@@ -357,7 +357,7 @@ function AdvancedOptions({
   const [open, setOpen] = useState(false)
 
   return (
-    <div className="rounded-xl border bg-muted/10 transition-shadow hover:infrared-glow">
+    <div className="rounded-xl border bg-muted/10 transition-shadow hover:border-primary/30">
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
@@ -489,7 +489,7 @@ function RecentJobs({ dashboard }: { dashboard: Dashboard }) {
           onClick={() => void dashboard.selectJob(job.id)}
           className={cn(
             "flex flex-col gap-3 rounded-xl border p-4 text-left transition-all duration-200",
-            "hover:infrared-glow hover:scale-[1.01] hover:bg-muted/20",
+            "hover:border-primary/50 hover:scale-[1.01] hover:bg-muted/20",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             dashboard.selectedJob?.id === job.id && "border-primary bg-primary/5 shadow-[0_0_16px_var(--primary)/0.08]"
           )}
@@ -516,7 +516,13 @@ function RecentJobs({ dashboard }: { dashboard: Dashboard }) {
 /* ============================================================
    WorkspacePage — main orchestrator
    ============================================================ */
-export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
+export function WorkspacePage({
+  dashboard,
+  requestNotificationPermission,
+}: {
+  dashboard: Dashboard
+  requestNotificationPermission?: () => Promise<NotificationPermission>
+}) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null)
@@ -594,8 +600,8 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
       <div className="grid items-start gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
         {/* ═══ LEFT PANEL — Upload & Score ═══ */}
         <div className="relative animate-fade-in-up" style={{ animationDelay: "0ms" }}>
-          <div className="absolute inset-y-0 left-0 z-10 w-[3px] rounded-full bg-primary/60" />
-          <Card className="h-fit xl:sticky xl:top-5 xl:self-start hover:infrared-glow transition-shadow duration-300">
+          <div className="absolute inset-y-0 left-0 z-10 w-0.75 rounded-full bg-primary/60" />
+          <Card className="h-fit xl:sticky xl:top-5 xl:self-start transition-shadow duration-300 hover:shadow-md">
             <CardHeader>
               <CardTitle className={sectionAccent}>上传与评分</CardTitle>
             </CardHeader>
@@ -626,7 +632,10 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
               <div className="grid grid-cols-2 gap-3">
                 <Button
                   size="lg"
-                  onClick={() => void dashboard.submit()}
+                  onClick={async () => {
+                    await requestNotificationPermission?.()
+                    void dashboard.submit()
+                  }}
                   disabled={dashboard.isSubmitting}
                 >
                   {dashboard.isSubmitting ? (
@@ -662,8 +671,8 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
         <div className="flex flex-col gap-5 animate-fade-in-up" style={{ animationDelay: "100ms" }}>
           {/* Results card */}
           <div className="relative">
-            <div className="absolute inset-y-0 left-0 z-10 w-[3px] rounded-full bg-primary/60" />
-            <Card className="hover:infrared-glow transition-shadow duration-300">
+            <div className="absolute inset-y-0 left-0 z-10 w-0.75 rounded-full bg-primary/60" />
+            <Card className="transition-shadow duration-300 hover:shadow-md">
               <CardHeader>
                 <CardTitle className={sectionAccent}>结果面板</CardTitle>
                 {selectedJob && dashboard.selectedResults.length > 0 ? (
@@ -714,7 +723,7 @@ export function WorkspacePage({ dashboard }: { dashboard: Dashboard }) {
                             caption: `${topResult.relative_path} · ${formatScore(topResult.quality_score)}`,
                           })
                         }
-                        className="overflow-hidden rounded-xl border bg-card transition-shadow hover:infrared-glow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="overflow-hidden rounded-xl border bg-card transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <img
                           src={topResult.public_url}

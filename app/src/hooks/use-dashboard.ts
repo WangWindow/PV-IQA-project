@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 
+import { useAuth } from "@/hooks/use-auth"
 import {
   deleteJob,
   fetchHealth,
@@ -110,6 +111,7 @@ function writeDashboardPreferences(preferences: {
 }
 
 export function useDashboard(): Dashboard {
+  const { isAuthenticated } = useAuth()
   const [storedPreferences] = useState<DashboardPreferences>(() => readDashboardPreferences())
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [jobs, setJobs] = useState<JobSummary[]>([])
@@ -139,9 +141,16 @@ export function useDashboard(): Dashboard {
   }, [])
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setIsLoading(false)
+      return
+    }
+
     let disposed = false
 
     async function bootstrap() {
+      setError(null)
+      setIsLoading(true)
       try {
         const [, nextJobs] = await Promise.all([refreshHealth(), fetchJobs()])
         if (disposed) {
@@ -172,7 +181,7 @@ export function useDashboard(): Dashboard {
     return () => {
       disposed = true
     }
-  }, [refreshHealth])
+  }, [isAuthenticated, refreshHealth])
 
   useEffect(() => {
     if (isLoading) {
@@ -208,7 +217,7 @@ export function useDashboard(): Dashboard {
     selectedJob?.status === "running" || jobs.some((job) => job.status === "running")
 
   useEffect(() => {
-    if (!hasRunningJob) {
+    if (!hasRunningJob || !isAuthenticated) {
       return
     }
 
@@ -231,10 +240,7 @@ export function useDashboard(): Dashboard {
         } else if (selectedJobId && !nextJobs.some((job) => job.id === selectedJobId)) {
           setSelectedJob(null)
         }
-      } catch (caughtError) {
-        if (!disposed) {
-          setError(String(caughtError))
-        }
+      } catch {
       }
     }
 
@@ -247,7 +253,7 @@ export function useDashboard(): Dashboard {
       disposed = true
       window.clearInterval(timer)
     }
-  }, [hasRunningJob, selectedJobId])
+  }, [hasRunningJob, isAuthenticated, selectedJobId])
 
   useEffect(() => {
     if (backend === "python") {

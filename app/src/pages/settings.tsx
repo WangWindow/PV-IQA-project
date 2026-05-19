@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react"
-import { Database, Lock, RefreshCw, Save, Server } from "lucide-react"
+import { Archive, Database, Lock, RefreshCw, Save, Server } from "lucide-react"
 
 import { useAuth, useIsAdmin } from "@/hooks/use-auth"
 import type { SystemSettings } from "@/lib/types"
-import { changePassword as changePasswordApi, fetchDbStats, fetchSettings, updateSettings } from "@/lib/api"
+import { archiveJobs, changePassword as changePasswordApi, fetchDbStats, fetchSettings, updateSettings } from "@/lib/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -41,6 +41,10 @@ export function SettingsPage() {
 
   // 数据库统计
   const [dbStats, setDbStats] = useState<{ jobs: number; results: number; users: number; audit_logs: number } | null>(null)
+
+  const [archiveDays, setArchiveDays] = useState(30)
+  const [archiving, setArchiving] = useState(false)
+  const [archiveMessage, setArchiveMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
 
   const loadSettings = useCallback(async () => {
     setSettingsLoading(true)
@@ -125,7 +129,7 @@ export function SettingsPage() {
       {/* 系统配置（仅管理员） */}
       {isAdmin && settings && (
         <Card
-          className="transition-shadow duration-300 hover:infrared-glow animate-fade-in-up"
+          className="transition-shadow duration-300 hover:shadow-md animate-fade-in-up"
           style={{ animationDelay: "50ms" }}
         >
           <CardHeader>
@@ -237,7 +241,7 @@ export function SettingsPage() {
       {/* 数据库统计（仅管理员） */}
       {isAdmin && dbStats && (
         <Card
-          className="transition-shadow duration-300 hover:infrared-glow animate-fade-in-up"
+          className="transition-shadow duration-300 hover:shadow-md animate-fade-in-up"
           style={{ animationDelay: "100ms" }}
         >
           <CardHeader>
@@ -268,9 +272,70 @@ export function SettingsPage() {
         </Card>
       )}
 
-      {/* 账户设置 */}
       <Card
-        className="transition-shadow duration-300 hover:infrared-glow animate-fade-in-up"
+        className="transition-shadow duration-300 hover:shadow-md animate-fade-in-up"
+        style={{ animationDelay: "140ms" }}
+      >
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Archive className="size-4 text-primary" />
+            自动归档
+          </CardTitle>
+          <CardDescription>归档超过指定天数的已完成任务</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup className="space-y-4">
+            <Field>
+              <FieldLabel>归档天数</FieldLabel>
+              <FieldContent>
+                <Input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={archiveDays}
+                  onChange={(e) => setArchiveDays(Number(e.target.value))}
+                />
+              </FieldContent>
+              <FieldDescription>超过此天数的已完成/失败/中断任务将被归档删除</FieldDescription>
+            </Field>
+            {archiveMessage && (
+              <Alert
+                variant={archiveMessage.type === "error" ? "destructive" : "default"}
+                className={
+                  archiveMessage.type === "success"
+                    ? "border-l-4 border-l-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20"
+                    : "border-l-4 border-l-destructive"
+                }
+              >
+                <AlertDescription>{archiveMessage.text}</AlertDescription>
+              </Alert>
+            )}
+            <Button
+              variant="outline"
+              disabled={archiving}
+              onClick={async () => {
+                setArchiving(true)
+                setArchiveMessage(null)
+                try {
+                  const result = await archiveJobs(archiveDays)
+                  setArchiveMessage({ type: "success", text: `已归档 ${result.archived} 个任务` })
+                  void loadDbStats()
+                } catch (err) {
+                  setArchiveMessage({ type: "error", text: err instanceof Error ? err.message : "归档失败" })
+                } finally {
+                  setArchiving(false)
+                }
+              }}
+            >
+              <Archive className="mr-1.5 size-3.5" />
+              {archiving ? "归档中..." : "立即归档"}
+            </Button>
+          </FieldGroup>
+        </CardContent>
+      </Card>
+
+      <Card
+        className="transition-shadow duration-300 hover:shadow-md animate-fade-in-up"
         style={{ animationDelay: "150ms" }}
       >
         <CardHeader>

@@ -20,7 +20,7 @@ export function StatCard({
       className={cn(
         "group relative rounded-xl border border-border bg-card p-4",
         "transition-all duration-300 ease-out",
-        "hover:scale-[1.01] hover:infrared-glow",
+        "hover:scale-[1.01] hover:border-primary/30 hover:shadow-md",
         className
       )}
     >

@@ -106,6 +106,54 @@ export async function batchDeleteJobs(jobIds: string[]): Promise<{ deleted: numb
   return { deleted: payload.deleted }
 }
 
+export async function batchRerunJobs(jobIds: string[]): Promise<{ rerunCount: number }> {
+  const payload = await unwrapJson<{ ok: boolean; rerun_count: number }>(
+    await authFetch("/api/jobs/batch-rerun", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_ids: jobIds }),
+    })
+  )
+  return { rerunCount: payload.rerun_count }
+}
+
+export async function updateJobTags(jobId: string, tags: string[]): Promise<{ ok: boolean }> {
+  await unwrapJson<{ ok: boolean }>(
+    await authFetch(`/api/jobs/${jobId}/tags`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tags }),
+    })
+  )
+  return { ok: true }
+}
+
+export async function updateJobNotes(jobId: string, notes: string): Promise<{ ok: boolean }> {
+  await unwrapJson<{ ok: boolean }>(
+    await authFetch(`/api/jobs/${jobId}/notes`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes }),
+    })
+  )
+  return { ok: true }
+}
+
+export async function archiveJobs(days: number): Promise<{ archived: number }> {
+  const payload = await unwrapJson<{ ok: boolean; archived: number }>(
+    await authFetch("/api/jobs/archive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ days }),
+    })
+  )
+  return { archived: payload.archived }
+}
+
+export async function exportJobs(): Promise<{ jobs: JobSummary[] }> {
+  return unwrapJson<{ jobs: JobSummary[] }>(await authFetch("/api/jobs/export"))
+}
+
 export async function cleanupJobs(days: number): Promise<{ cleaned: number }> {
   const payload = await unwrapJson<{ ok: boolean; cleaned: number }>(
     await authFetch(`/api/jobs/cleanup?days=${days}`, { method: "POST" })
@@ -199,7 +247,11 @@ export async function fetchCurrentUser(): Promise<UserInfo | null> {
       await authFetch("/api/auth/me")
     )
     return payload.user
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (!message.includes("AUTH_REQUIRED") && !message.includes("401")) {
+      console.error("fetchCurrentUser failed:", err)
+    }
     return null
   }
 }

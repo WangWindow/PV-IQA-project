@@ -8,122 +8,118 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* ── Infrared Precision 色彩体系 ────────────────────────────
-   设计理念：掌静脉近红外成像 → 深色背景 + 暖红外色调 + 冷色数据叠加
+/* ── VeinWave 色彩体系 ──────────────────────────────────
+   设计理念：掌静脉近红外成像 → 深海军蓝底 + 青蓝主色 + 暖色点缀
 
-   轻色模式：白底 + 玫瑰色调主色 + 深灰文字
-   深色模式：深海军蓝底 + 红外辉光主色 + 远红外边框 */
+   轻色模式：冷白底 + 青蓝主色 + 深灰文字
+   深色模式：深海军蓝底 + 青蓝辉光 + 微暖边框 */
 
 :root {
   /* ── 核心色板 ──────────────────────────────────────────── */
-  --background: oklch(0.985 0.002 295);
-  --foreground: oklch(0.145 0.015 285);
+  --background: oklch(0.985 0.002 250);
+  --foreground: oklch(0.155 0.012 260);
 
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0.015 285);
+  --card-foreground: oklch(0.155 0.012 260);
 
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0.015 285);
+  --popover-foreground: oklch(0.155 0.012 260);
 
-  /* 主色调 —— 玫瑰深红 (红外成像色调) */
-  --primary: oklch(0.55 0.22 10);
-  --primary-foreground: oklch(0.98 0.002 295);
+  /* 主色调 —— 青蓝 (医疗设备蓝 / 近红外伪彩) */
+  --primary: oklch(0.46 0.15 245);
+  --primary-foreground: oklch(0.985 0.002 250);
 
-  --secondary: oklch(0.96 0.008 295);
-  --secondary-foreground: oklch(0.25 0.02 285);
+  --secondary: oklch(0.96 0.006 250);
+  --secondary-foreground: oklch(0.25 0.018 260);
 
-  --muted: oklch(0.95 0.006 295);
-  --muted-foreground: oklch(0.52 0.015 285);
+  --muted: oklch(0.95 0.005 250);
+  --muted-foreground: oklch(0.52 0.012 260);
 
-  --accent: oklch(0.92 0.025 10);
-  --accent-foreground: oklch(0.2 0.03 10);
+  --accent: oklch(0.92 0.035 230);
+  --accent-foreground: oklch(0.22 0.04 230);
 
   --destructive: oklch(0.55 0.24 25);
   --destructive-foreground: oklch(0.98 0 0);
 
   /* 边框 —— 细线低对比 */
-  --border: oklch(0.905 0.008 295);
-  --input: oklch(0.905 0.008 295);
-  --ring: oklch(0.55 0.22 10);
+  --border: oklch(0.91 0.006 250);
+  --input: oklch(0.91 0.006 250);
+  --ring: oklch(0.46 0.15 245);
 
   --radius: 0.5rem;
 
-  /* 图表色板 —— 红外 + 青蓝混搭 */
-  --chart-1: oklch(0.55 0.22 10);
-  --chart-2: oklch(0.68 0.15 230);
-  --chart-3: oklch(0.72 0.14 330);
-  --chart-4: oklch(0.65 0.18 55);
-  --chart-5: oklch(0.62 0.16 175);
+  /* 图表色板 —— 青蓝 + 暖色点缀 */
+  --chart-1: oklch(0.46 0.15 245);
+  --chart-2: oklch(0.65 0.14 195);
+  --chart-3: oklch(0.62 0.15 280);
+  --chart-4: oklch(0.65 0.16 55);
+  --chart-5: oklch(0.6 0.14 160);
 
   /* 侧边栏 */
-  --sidebar: oklch(0.94 0.008 295);
-  --sidebar-foreground: oklch(0.145 0.015 285);
-  --sidebar-primary: oklch(0.55 0.22 10);
-  --sidebar-primary-foreground: oklch(0.98 0.002 295);
-  --sidebar-accent: oklch(0.92 0.025 10);
-  --sidebar-accent-foreground: oklch(0.2 0.03 10);
-  --sidebar-border: oklch(0.905 0.008 295);
-  --sidebar-ring: oklch(0.55 0.22 10);
+  --sidebar: oklch(0.95 0.006 250);
+  --sidebar-foreground: oklch(0.155 0.012 260);
+  --sidebar-primary: oklch(0.46 0.15 245);
+  --sidebar-primary-foreground: oklch(0.985 0.002 250);
+  --sidebar-accent: oklch(0.92 0.035 230);
+  --sidebar-accent-foreground: oklch(0.22 0.04 230);
+  --sidebar-border: oklch(0.91 0.006 250);
+  --sidebar-ring: oklch(0.46 0.15 245);
 
-  /* 页面背景 —— 微妙的温光渐变 */
-  --app-gradient-start: oklch(0.98 0.008 295);
-  --app-gradient-end: oklch(0.965 0.012 10);
-  --app-glow-left: oklch(0.55 0.22 10 / 0.06);
-  --app-glow-right: oklch(0.68 0.15 230 / 0.04);
+  /* 页面背景 —— 微妙的冷光渐变 */
+  --app-gradient-start: oklch(0.985 0.004 250);
+  --app-gradient-end: oklch(0.972 0.008 230);
+  --app-glow-left: oklch(0.46 0.15 245 / 0.05);
+  --app-glow-right: oklch(0.65 0.14 195 / 0.04);
 }
 
 .dark {
-  /* ── 深色模式：近红外成像核心 ────────────────────────────── */
-  --background: oklch(0.13 0.015 285);
-  --foreground: oklch(0.93 0.005 295);
+  --background: oklch(0.20 0.015 260);
+  --foreground: oklch(0.93 0.005 245);
 
-  --card: oklch(0.17 0.016 285);
-  --card-foreground: oklch(0.93 0.005 295);
+  --card: oklch(0.26 0.018 260);
+  --card-foreground: oklch(0.93 0.005 245);
 
-  --popover: oklch(0.16 0.016 285);
-  --popover-foreground: oklch(0.93 0.005 295);
+  --popover: oklch(0.24 0.018 260);
+  --popover-foreground: oklch(0.93 0.005 245);
 
-  /* 主色调 —— 明亮红外红 (发光效果) */
-  --primary: oklch(0.65 0.25 10);
-  --primary-foreground: oklch(0.1 0.02 285);
+  --primary: oklch(0.62 0.14 220);
+  --primary-foreground: oklch(0.1 0.018 260);
 
-  --secondary: oklch(0.22 0.015 285);
-  --secondary-foreground: oklch(0.93 0.005 295);
+  --secondary: oklch(0.28 0.02 260);
+  --secondary-foreground: oklch(0.93 0.005 245);
 
-  --muted: oklch(0.22 0.015 285);
-  --muted-foreground: oklch(0.65 0.01 295);
+  --muted: oklch(0.30 0.015 260);
+  --muted-foreground: oklch(0.75 0.01 260);
 
-  --accent: oklch(0.26 0.03 10);
-  --accent-foreground: oklch(0.93 0.005 295);
+  --accent: oklch(0.30 0.04 220);
+  --accent-foreground: oklch(0.93 0.005 245);
 
-  --destructive: oklch(0.65 0.22 25);
+  --destructive: oklch(0.62 0.22 25);
   --destructive-foreground: oklch(0.98 0 0);
 
-  /* 边框 —— 微光边缘 (红外扫描线效果) */
-  --border: oklch(0.28 0.02 285 / 0.8);
-  --input: oklch(0.26 0.02 285);
-  --ring: oklch(0.65 0.25 10);
+  --border: oklch(0.38 0.02 260 / 0.8);
+  --input: oklch(0.30 0.02 260);
+  --ring: oklch(0.62 0.14 220);
 
-  --chart-1: oklch(0.65 0.25 10);
-  --chart-2: oklch(0.72 0.14 230);
-  --chart-3: oklch(0.68 0.16 330);
-  --chart-4: oklch(0.7 0.16 55);
-  --chart-5: oklch(0.65 0.14 175);
+  --chart-1: oklch(0.62 0.14 220);
+  --chart-2: oklch(0.7 0.12 195);
+  --chart-3: oklch(0.65 0.14 280);
+  --chart-4: oklch(0.68 0.14 55);
+  --chart-5: oklch(0.62 0.12 160);
 
-  --sidebar: oklch(0.15 0.018 285);
-  --sidebar-foreground: oklch(0.93 0.005 295);
-  --sidebar-primary: oklch(0.65 0.25 10);
-  --sidebar-primary-foreground: oklch(0.1 0.02 285);
-  --sidebar-accent: oklch(0.24 0.035 10);
-  --sidebar-accent-foreground: oklch(0.93 0.005 295);
-  --sidebar-border: oklch(0.28 0.02 285 / 0.8);
-  --sidebar-ring: oklch(0.65 0.25 10);
+  --sidebar: oklch(0.22 0.02 260);
+  --sidebar-foreground: oklch(0.93 0.005 245);
+  --sidebar-primary: oklch(0.62 0.14 220);
+  --sidebar-primary-foreground: oklch(0.1 0.018 260);
+  --sidebar-accent: oklch(0.30 0.04 220);
+  --sidebar-accent-foreground: oklch(0.93 0.005 245);
+  --sidebar-border: oklch(0.35 0.02 260 / 0.8);
+  --sidebar-ring: oklch(0.62 0.14 220);
 
-  /* 深色背景 —— 微红外辉光 */
-  --app-gradient-start: oklch(0.145 0.018 285);
-  --app-gradient-end: oklch(0.12 0.015 285);
-  --app-glow-left: oklch(0.65 0.25 10 / 0.1);
-  --app-glow-right: oklch(0.55 0.15 230 / 0.06);
+  --app-gradient-start: oklch(0.22 0.018 260);
+  --app-gradient-end: oklch(0.18 0.015 260);
+  --app-glow-left: oklch(0.62 0.14 220 / 0.12);
+  --app-glow-right: oklch(0.55 0.12 195 / 0.08);
 }
 
 @theme inline {
@@ -189,7 +185,7 @@
     @apply font-sans;
   }
 
-  /* ── Infrared Precision 基础样式 ────────────────────────── */
+  /* ── VeinWave 基础样式 ──────────────────────────── */
 
   /* 等宽数据字体 */
   .font-data {
@@ -197,28 +193,28 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* 红外辉光边框效果 */
+  /* 青蓝辉光边框效果 */
   .infrared-glow {
     box-shadow:
-      0 0 0 1px oklch(0.55 0.22 10 / 0.3),
-      0 0 12px oklch(0.55 0.22 10 / 0.08);
+      0 0 0 1px oklch(0.46 0.15 245 / 0.3),
+      0 0 12px oklch(0.46 0.15 245 / 0.08);
   }
   .dark .infrared-glow {
     box-shadow:
-      0 0 0 1px oklch(0.65 0.25 10 / 0.5),
-      0 0 20px oklch(0.65 0.25 10 / 0.15);
+      0 0 0 1px oklch(0.62 0.14 220 / 0.5),
+      0 0 20px oklch(0.62 0.14 220 / 0.15);
   }
 
   /* 青蓝数据辉光 */
   .cyan-glow {
     box-shadow:
-      0 0 0 1px oklch(0.68 0.15 230 / 0.3),
-      0 0 12px oklch(0.68 0.15 230 / 0.06);
+      0 0 0 1px oklch(0.65 0.14 195 / 0.3),
+      0 0 12px oklch(0.65 0.14 195 / 0.06);
   }
   .dark .cyan-glow {
     box-shadow:
-      0 0 0 1px oklch(0.72 0.14 230 / 0.5),
-      0 0 20px oklch(0.72 0.14 230 / 0.12);
+      0 0 0 1px oklch(0.7 0.12 195 / 0.5),
+      0 0 20px oklch(0.7 0.12 195 / 0.12);
   }
 
   /* 红外脉冲动画 */
@@ -287,13 +283,13 @@
 
   /* 渐变文字（用于标题装饰） */
   .text-infrared-gradient {
-    background: linear-gradient(135deg, oklch(0.55 0.22 10), oklch(0.65 0.2 350));
+    background: linear-gradient(135deg, oklch(0.46 0.15 245), oklch(0.6 0.14 195));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
   }
   .dark .text-infrared-gradient {
-    background: linear-gradient(135deg, oklch(0.65 0.25 10), oklch(0.75 0.22 350));
+    background: linear-gradient(135deg, oklch(0.62 0.14 220), oklch(0.7 0.12 195));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;

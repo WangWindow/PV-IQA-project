@@ -19,6 +19,7 @@ import { useAuth } from "@/hooks/use-auth"
 import { useThemeMode } from "@/hooks/use-theme-mode"
 import type { ThemeMode } from "@/lib/theme"
 import { cn } from "@/lib/utils"
+import { Logo } from "@/components/logo"
 import {
   Sheet,
   SheetClose,
@@ -67,27 +68,15 @@ function themeMeta(mode: ThemeMode) {
   return THEME_ITEMS.find((item) => item.value === mode) ?? THEME_ITEMS[0]
 }
 
-/** PV-IQA Logo — 掌静脉纹路图标 */
-function AppLogo({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-    >
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
-      <path
-        d="M8 12c0-2.21 1.79-4 4-4s4 1.79 4 4-1.79 4-4 4"
-        strokeLinecap="round"
-      />
-      <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
-    </svg>
-  )
+type AppShellProps = {
+  dashboard: Dashboard
+  children: ReactNode
+  requestNotificationPermission?: () => Promise<NotificationPermission>
 }
 
-export function AppShell({ children }: { dashboard: Dashboard; children: ReactNode }) {
+export function AppShell({
+  children,
+}: AppShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const theme = useThemeMode()
   const { user, logout, isAuthenticated } = useAuth()
@@ -103,7 +92,7 @@ export function AppShell({ children }: { dashboard: Dashboard; children: ReactNo
           onClick={onNavClick}
           className="group flex items-center gap-2.5 px-4 pt-5 pb-4"
         >
-          <AppLogo className="size-7 shrink-0 text-[var(--sidebar-primary)] transition-transform group-hover:scale-110" />
+          <Logo size={28} className="shrink-0 text-[var(--sidebar-primary)] transition-transform group-hover:scale-110" />
           <span className="text-lg font-semibold tracking-tight text-[var(--sidebar-foreground)]">
             PV-IQA
           </span>
@@ -125,8 +114,8 @@ export function AppShell({ children }: { dashboard: Dashboard; children: ReactNo
                         "border-[var(--sidebar-primary)]",
                         "bg-[var(--sidebar-primary)]/10",
                         "text-[var(--sidebar-foreground)] font-semibold",
-                        "shadow-[2px_0_12px_-2px_var(--primary)_/_0.15]",
-                        "dark:shadow-[2px_0_16px_-2px_var(--sidebar-primary)_/_0.25]",
+"shadow-[2px_0_12px_-2px_var(--primary)_/_0.12]",
+          "dark:shadow-[2px_0_16px_-2px_var(--sidebar-primary)_/_0.2]",
                       ]
                     : [
                         "text-[var(--sidebar-foreground)]/65",
@@ -284,7 +273,7 @@ export function AppShell({ children }: { dashboard: Dashboard; children: ReactNo
           to="/workspace"
           className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 text-foreground"
         >
-          <AppLogo className="size-5 text-primary" />
+          <Logo size={20} className="text-primary" />
           <span className="text-sm font-semibold tracking-tight">PV-IQA</span>
         </Link>
 
@@ -297,6 +286,7 @@ export function AppShell({ children }: { dashboard: Dashboard; children: ReactNo
                 type="button"
                 className="flex size-7 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
                 title={user.username}
+                aria-label={`用户菜单：${user.username}`}
               >
                 {user.username.charAt(0).toUpperCase()}
               </button>
