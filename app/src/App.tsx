@@ -43,6 +43,11 @@ const UsersPage = lazy(async () => {
   return { default: module.UsersPage }
 })
 
+const ComparePage = lazy(async () => {
+  const module = await import("@/pages/compare")
+  return { default: module.ComparePage }
+})
+
 function SuspenseFallback() {
   return (
     <div className="flex min-h-[50vh] items-center justify-center">
@@ -124,6 +129,18 @@ function AppRoutes() {
               <AppShell dashboard={dashboard}>
                 <Suspense fallback={<SuspenseFallback />}>
                   <SettingsPage />
+                </Suspense>
+              </AppShell>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/compare"
+          element={
+            <RequireAuth>
+              <AppShell dashboard={dashboard}>
+                <Suspense fallback={<SuspenseFallback />}>
+                  <ComparePage />
                 </Suspense>
               </AppShell>
             </RequireAuth>

@@ -154,6 +154,25 @@ export type SystemSettings = {
   system_name: string
 }
 
+// ── 模型对比类型 ────────────────────────────────────────
+
+export type ModelMeta = {
+  run_name: string
+  name?: string
+  date?: string
+  duration?: string
+  overridden?: string[]
+  params?: Record<string, string>
+  metrics?: Record<string, string>
+  has_pytorch: boolean
+  has_onnx: boolean
+}
+
+export type CompareResponse = {
+  original_job_id: string
+  new_job: JobRecord
+}
+
 // ── API 错误响应类型 ────────────────────────────────────
 
 export type ApiError = {

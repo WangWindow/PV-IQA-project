@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react"
 import { Link, NavLink } from "react-router-dom"
 import {
+  ArrowLeftRight,
   FolderClock,
   LayoutDashboard,
   LaptopMinimal,
@@ -37,12 +38,14 @@ import {
 const NAV_ITEMS_USER = [
   { to: "/workspace", label: "工作台", icon: LayoutDashboard },
   { to: "/jobs", label: "我的任务", icon: FolderClock },
+  { to: "/compare", label: "模型对比", icon: ArrowLeftRight },
   { to: "/settings", label: "设置", icon: Settings },
 ] as const
 
 const NAV_ITEMS_ADMIN = [
   { to: "/workspace", label: "工作台", icon: LayoutDashboard },
   { to: "/jobs", label: "所有任务", icon: FolderClock },
+  { to: "/compare", label: "模型对比", icon: ArrowLeftRight },
   { to: "/users", label: "用户", icon: Users },
   { to: "/logs", label: "日志", icon: FileText },
   { to: "/settings", label: "设置", icon: Settings },

@@ -8,11 +8,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Form
 
 from ..database import db_execute, db_fetchall, db_fetchone, now_iso
 from ..middleware.error_handler import ForbiddenError, JobError
 from ..routers.auth import require_admin, require_auth
+from ..services.scoring import default_run_name, process_job
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -338,3 +339,79 @@ async def cleanup_jobs(admin: dict = Depends(require_admin)) -> dict[str, object
         (cutoff_str,),
     )
     return {"ok": True, "cleaned": count, "cutoff_days": days}
+
+
+@router.post("/{job_id}/compare")
+async def compare_job(
+    job_id: str,
+    run_name: str = Form(""),
+    backend: str = Form("python"),
+    device: str = Form("cpu"),
+    user: dict = Depends(require_auth),
+) -> dict[str, object]:
+    """用不同模型对相同图片重新评分，创建对比任务。"""
+    import uuid
+
+    current = db_fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
+    if current is None:
+        raise JobError("原任务不存在", code="JOB_NOT_FOUND")
+
+    job_data = dict(current)
+    if user.get("role") != "admin" and job_data.get("user_id") != user["id"]:
+        raise ForbiddenError("无权操作此任务")
+
+    if job_data.get("status") != "completed":
+        raise JobError("只能对比已完成的任务", code="JOB_NOT_COMPLETED")
+
+    # 获取原任务的所有结果图片
+    results = db_fetchall(
+        "SELECT image_path, relative_path, public_url FROM results WHERE job_id = ?",
+        (job_id,),
+    )
+    if not results:
+        raise JobError("原任务无评分结果", code="NO_RESULTS")
+
+    run = run_name.strip() or default_run_name()
+    new_job_id = uuid.uuid4().hex
+
+    image_paths = [
+        (row["image_path"], row["relative_path"], row["public_url"])
+        for row in results
+    ]
+
+    db_execute(
+        """
+        INSERT INTO jobs (
+            id, kind, status, backend, device, run_name, input_count, user_id,
+            processed_count, result_count, progress, stage, error, average_score,
+            best_score, worst_score, created_at, updated_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, NULL, NULL, NULL, NULL, ?, ?, NULL)
+        """,
+        (
+            new_job_id,
+            job_data["kind"],
+            "running",
+            backend,
+            device,
+            run,
+            len(image_paths),
+            user["id"],
+            "scoring",
+            now_iso(),
+            now_iso(),
+        ),
+    )
+
+    import threading
+
+    threading.Thread(
+        target=process_job,
+        args=(new_job_id, run, image_paths, backend, device),
+        daemon=True,
+    ).start()
+
+    new_job = db_fetchone("SELECT * FROM jobs WHERE id = ?", (new_job_id,))
+    return {
+        "original_job_id": job_id,
+        "new_job": {**dict(new_job or {}), "results": []},
+    }

@@ -2,12 +2,14 @@ import type {
   AuditLog,
   AuditLogPage,
   AuthResponse,
+  CompareResponse,
   HealthResponse,
   ImageMetadata,
   InferenceBackend,
   JobRecord,
   JobSummary,
   LoginRequest,
+  ModelMeta,
   RegisterRequest,
   SystemSettings,
   UploadItem,
@@ -364,4 +366,31 @@ export async function updateSettings(settings: Partial<SystemSettings>): Promise
 
 export async function fetchDbStats(): Promise<{ stats: { jobs: number; results: number; users: number; audit_logs: number } }> {
   return unwrapJson(await authFetch("/api/settings/db-stats"))
+}
+
+// ── 模型对比 ────────────────────────────────────────────
+
+export async function fetchModels(): Promise<ModelMeta[]> {
+  const payload = await unwrapJson<{ models: ModelMeta[] }>(
+    await authFetch("/api/models")
+  )
+  return payload.models
+}
+
+export async function createComparison(
+  jobId: string,
+  runName: string,
+  backend: InferenceBackend = "python",
+  device: "cpu" | "cuda" = "cpu"
+): Promise<CompareResponse> {
+  const formData = new FormData()
+  formData.append("run_name", runName)
+  formData.append("backend", backend)
+  formData.append("device", device)
+  return unwrapJson<CompareResponse>(
+    await authFetch(`/api/jobs/${jobId}/compare`, {
+      method: "POST",
+      body: formData,
+    })
+  )
 }

@@ -19,7 +19,7 @@ from .config import UPLOAD_ROOT
 from .database import run_migrations
 from .middleware.error_handler import register_error_handlers
 from .middleware.logging import AuditLogMiddleware
-from .routers import auth, health, images, jobs, logs, score, settings
+from .routers import auth, health, images, jobs, logs, models, score, settings
 
 # ── 数据库迁移 ──────────────────────────────────────────
 # 启动时自动执行所有未应用的迁移
@@ -45,6 +45,7 @@ app.include_router(auth.router)
 app.include_router(settings.router)
 app.include_router(logs.router)
 app.include_router(images.router)
+app.include_router(models.router)
 
 
 @app.on_event("startup")
