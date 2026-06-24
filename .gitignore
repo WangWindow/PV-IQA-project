@@ -36,9 +36,9 @@ venv/
 
 bin/
 temp/
+
 dataset[s]/
 checkpoints/
-.sisyphus/
 plots/
 wandb/
 
@@ -46,3 +46,10 @@ wandb/
 *.pt
 *.pth
 *.safetensors
+
+.claude/
+.codex/
+.copilot/
+.gemini/
+.omo/
+.opencode/
