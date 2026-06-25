@@ -22,9 +22,8 @@ def export_onnx(config: Config, ckpt: str | Path) -> Path:
         str(onnx_p),
         input_names=["image"],
         output_names=["score"],
-        opset_version=14,
-        do_constant_folding=True,
-        dynamic_axes={"image": {0: "batch"}, "score": {0: "batch"}},
+        opset_version=18,
+        dynamic_shapes=({0: torch.export.Dim("batch")},),
     )
     save_json(
         Path(ckpt).with_suffix(".onnx.json"),
