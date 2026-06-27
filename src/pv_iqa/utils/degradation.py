@@ -1,12 +1,14 @@
-"""PGRG 风格排序预训练的图像退化生成器。
+"""排序预训练的图像退化生成器。
 
 退化类型：
-  - gaussian_blur:  高斯模糊 (模糊)
-  - overexpose:     过曝
-  - underexpose:    过暗
-  - occlude:        不完整（角落遮挡，黑色填充）
+  - gaussian_blur:    高斯模糊（torchvision）
+  - overexpose:       过曝（逐像素 × level → clamp [-1,1]）
+  - underexpose:      过暗（逐像素 × level → clamp [-1,1]）
+  - corner_cut:       角落楔形切割（随机顶点出发，level=切割角度°）
+  - low_resolution:   低分辨率（bilinear 缩至 level 再放大回原尺寸）
+  - block_occlusion:  方块遮挡（随机位置黑色方块，level=边长占图像比）
 
-所有操作均在 [-1, 1] 范围的 torch 张量（归一化后）上执行。
+所有操作在 [-1, 1] 范围的 torch 张量上执行。
 """
 
 import math
@@ -15,44 +17,16 @@ import torch
 import torch.nn.functional as F
 from torchvision.transforms.functional import gaussian_blur
 
-DEGRADE_TYPES = [
-    "gaussian_blur",
-    "overexpose",
-    "underexpose",
-    "occlude",
-]
-
-DEFAULT_LEVELS = {
-    "gaussian_blur": [3, 7],
-    "overexpose":    [1.5, 3.0],
-    "underexpose":   [0.6, 0.2],
-    "occlude":       [0.15, 0.30],
+# fmt: off
+DEGRADE_TYPES: dict[str, list[float]] = {
+    "gaussian_blur":    [3,    5,    7,    9   ],
+    "overexpose":       [1.5,  2,    2.5,  3   ],
+    "underexpose":      [0.8,  0.6,  0.4,  0.2 ],
+    "corner_cut":       [10,   20,   30,   40  ],
+    "low_resolution":   [0.8,  0.6,  0.4,  0.2 ],
+    "block_occlusion":  [0.05, 0.10, 0.15, 0.20],
 }
-
-
-def _make_motion_kernel(kernel_size: int, angle_deg: float) -> torch.Tensor:
-    ks2 = kernel_size // 2
-    angle_rad = math.radians(angle_deg)
-    cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
-    kernel = torch.zeros(kernel_size, kernel_size, dtype=torch.float32)
-    for i in range(kernel_size):
-        y = i - ks2
-        for j in range(kernel_size):
-            x = j - ks2
-            if abs(x * cos_a + y * sin_a) <= 0.5:
-                kernel[i, j] = 1.0
-    return kernel / kernel.sum()
-
-
-def _apply_motion_blur(images: torch.Tensor, kernel_size: int = 7) -> torch.Tensor:
-    B, C, H, W = images.shape
-    out = images.clone()
-    for i in range(B):
-        angle = float(torch.randint(0, 180, (1,)).item())
-        kernel = _make_motion_kernel(kernel_size, angle).to(images.device)
-        kernel = kernel.view(1, 1, kernel_size, kernel_size).repeat(C, 1, 1, 1)
-        out[i : i + 1] = F.conv2d(images[i : i + 1], kernel, padding=kernel_size // 2, groups=C)
-    return out
+# fmt: on
 
 
 def apply_degradation(
@@ -70,22 +44,52 @@ def apply_degradation(
     elif degrade_type == "underexpose":
         return torch.clamp(images * level, -1.0, 1.0)
 
-    elif degrade_type == "occlude":
+    elif degrade_type == "corner_cut":
         B, C, H, W = images.shape
+        angle_rad = math.radians(min(level, 90.0))
+
+        Y, X = torch.meshgrid(
+            torch.arange(H, device=images.device, dtype=torch.float32),
+            torch.arange(W, device=images.device, dtype=torch.float32),
+            indexing="ij",
+        )
+
+        dy0, dx0 = Y, X
+        dy1, dx1 = Y, W - 1 - X
+        dy2, dx2 = H - 1 - Y, X
+        dy3, dx3 = H - 1 - Y, W - 1 - X
+
+        wedge0 = torch.atan2(dy0, dx0) < angle_rad  # top-left
+        wedge1 = torch.atan2(dy1, dx1) < angle_rad  # top-right
+        wedge2 = torch.atan2(dy2, dx2) < angle_rad  # bottom-left
+        wedge3 = torch.atan2(dy3, dx3) < angle_rad  # bottom-right
+
+        masks = torch.stack([wedge0, wedge1, wedge2, wedge3])
+
         out = images.clone()
-        frac = min(level, 0.5)
-        oh, ow = int(H * frac), int(W * frac)
+        corners = torch.randint(0, 4, (B,), device=images.device)
         for i in range(B):
-            corner = torch.randint(0, 4, (1,)).item()
-            if corner == 0:
-                out[i, :, :oh, :ow] = -1.0
-            elif corner == 1:
-                out[i, :, :oh, W - ow:] = -1.0
-            elif corner == 2:
-                out[i, :, H - oh:, :ow] = -1.0
-            else:
-                out[i, :, H - oh:, W - ow:] = -1.0
+            out[i, :, masks[corners[i]]] = -1.0
         return out
+
+    elif degrade_type == "block_occlusion":
+        B, C, H, W = images.shape
+        s = max(8, int(min(H, W) * level))
+        out = images.clone()
+        for i in range(B):
+            top = torch.randint(0, H - s + 1, (1,), device=images.device).item()
+            left = torch.randint(0, W - s + 1, (1,), device=images.device).item()
+            out[i, :, top : top + s, left : left + s] = -1.0
+        return out
+
+    elif degrade_type == "low_resolution":
+        _, _, H, W = images.shape
+        small_H = max(4, int(H * level))
+        small_W = max(4, int(W * level))
+        down = F.interpolate(
+            images, size=(small_H, small_W), mode="bilinear", align_corners=False
+        )
+        return F.interpolate(down, size=(H, W), mode="bilinear", align_corners=False)
 
     raise ValueError(f"Unknown degrade_type: {degrade_type}")
 
@@ -93,10 +97,10 @@ def apply_degradation(
 def generate_ranking_pair(
     images: torch.Tensor,
     rng: torch.Generator | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    d_idx = torch.randint(0, len(DEGRADE_TYPES), (1,), generator=rng).item()
-    d_type = DEGRADE_TYPES[d_idx]
-    levels = DEFAULT_LEVELS[d_type]
-    mild = apply_degradation(images, d_type, levels[0])
-    severe = apply_degradation(images, d_type, levels[1])
-    return mild, severe
+):
+    names = list(DEGRADE_TYPES.keys())
+    d_idx = torch.randint(0, len(names), (1,), generator=rng).item()
+    d_type = names[d_idx]
+    levels = DEGRADE_TYPES[d_type]
+    degraded = tuple(apply_degradation(images, d_type, lv) for lv in levels)
+    return degraded, d_idx

@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 from pathlib import Path
 
@@ -30,22 +31,12 @@ class ExperimentLogger:
         if config.wandb_enabled:
             try:
                 import wandb
+
                 self.wandb = wandb
                 self.wandb.init(
                     project=config.wandb_project,
                     name=config.wandb_run_name or config.name,
-                    config={
-                        k: getattr(config, k)
-                        for k in [
-                            "pseudo_beta", "pseudo_mode",
-                            "iqa_epochs", "iqa_lr", "iqa_wd",
-                            "iqa_huber_delta",
-                            "iqa_rank_weight", "iqa_min_rank_gap",
-                            "iqa_degrade_rank_weight", "iqa_degrade_margin",
-                            "iqa_sigmoid_tau",
-                        ]
-                    },
-                    reinit=True,
+                    config=dataclasses.asdict(config),
                 )
             except Exception as e:
                 self.info(f"wandb init failed: {e}")

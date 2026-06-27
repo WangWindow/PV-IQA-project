@@ -33,7 +33,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pv-iqa = "pv_iqa:main"
+pv-iqa = "pv_iqa.eval:main"
 
 [dependency-groups]
 dev = ["build>=1.4.2", "ruff>=0.15.9"]

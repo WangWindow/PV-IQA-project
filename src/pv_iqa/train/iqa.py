@@ -1,6 +1,6 @@
 """基于伪标签监督的 IQA 回归模型训练。
 
-Loss = huber_w × Huber(pred, label)
+Loss = huber_w  × Huber(pred, label)
      + rank_w   × LabelRank(pred, label)
      + drank_w  × DegradeRank(pred_mild, pred_severe)
 """
@@ -11,7 +11,6 @@ import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
 from tqdm.auto import tqdm
-
 
 from pv_iqa.config import Config
 from pv_iqa.models import PalmVeinIQARegressor
@@ -61,8 +60,7 @@ def train_iqa(config: Config) -> Path:
     )
 
     model = PalmVeinIQARegressor(
-        config.iqa_backbone,
-        pretrained=config.iqa_pretrained,
+        config.iqa_backbone, pretrained=config.iqa_pretrained
     ).to(device)
 
     opt = AdamW(model.parameters(), lr=config.iqa_lr, weight_decay=config.iqa_wd)
@@ -84,6 +82,7 @@ def train_iqa(config: Config) -> Path:
     scaler = torch.GradScaler(enabled=device.type == "cuda" and config.amp)
 
     best_mae = float("inf")
+    best_epoch = 0
     best_path = output_dir / "best.pt"
     global_step = 0
 
@@ -121,14 +120,36 @@ def train_iqa(config: Config) -> Path:
                 if config.iqa_degrade_rank_weight > 0:
                     low_mask = target < target.median()
                     if low_mask.any():
-                        deg_mild, deg_severe = generate_ranking_pair(
+                        degraded, degrade_idx = generate_ranking_pair(
                             batch["image"][low_mask]
                         )
-                        pred_mild = model(deg_mild)
-                        pred_severe = model(deg_severe)
-                        l_drank = F.relu(
-                            pred_severe - pred_mild + config.iqa_degrade_margin
+                        d0, d1, d2, d3 = degraded
+                        p0, g0 = model(d0, return_gate_logits=True)
+                        p1, g1 = model(d1, return_gate_logits=True)
+                        p2, g2 = model(d2, return_gate_logits=True)
+                        p3, g3 = model(d3, return_gate_logits=True)
+
+                        l_drank = (
+                            F.relu(p1 - p0 + config.iqa_degrade_margin)
+                            + F.relu(p2 - p1 + config.iqa_degrade_margin)
+                            + F.relu(p3 - p2 + config.iqa_degrade_margin)
                         ).mean()
+
+                        if config.iqa_moe_gate_weight > 0:
+                            expert_target = torch.full(
+                                (g0.shape[0],),
+                                degrade_idx,
+                                device=g0.device,
+                                dtype=torch.long,
+                            )
+                            l_gate = (
+                                F.cross_entropy(g0, expert_target)
+                                + F.cross_entropy(g1, expert_target)
+                                + F.cross_entropy(g2, expert_target)
+                                + F.cross_entropy(g3, expert_target)
+                            )
+                            l_drank = l_drank + config.iqa_moe_gate_weight * l_gate
+
                         epoch_drank += l_drank.item()
                         loss = loss + config.iqa_degrade_rank_weight * l_drank
 
@@ -145,11 +166,14 @@ def train_iqa(config: Config) -> Path:
         sched.step()
 
         n_batches = len(train_loader)
-        logger.log_metrics({
-            "train/huber_raw": epoch_huber / n_batches,
-            "train/label_rank": epoch_rank / n_batches,
-            "train/degrade_rank": epoch_drank / n_batches,
-        }, step=epoch)
+        logger.log_metrics(
+            {
+                "train/huber_raw": epoch_huber / n_batches,
+                "train/label_rank": epoch_rank / n_batches,
+                "train/degrade_rank": epoch_drank / n_batches,
+            },
+            step=epoch,
+        )
 
         model.eval()
         preds, targets = [], []
@@ -165,26 +189,31 @@ def train_iqa(config: Config) -> Path:
             f"Epoch {epoch:3d} | MAE={report.mae:.4f} "
             f"RMSE={report.rmse:.4f} ρ={report.spearman:.3f}"
         )
-        logger.log_metrics({
-            "val/mae": report.mae,
-            "val/rmse": report.rmse,
-            "val/pearson": report.pearson,
-            "val/spearman": report.spearman,
-            "val/rank_acc": report.ranking_accuracy,
-            "epoch": epoch,
-        }, step=epoch)
+        logger.log_metrics(
+            {
+                "val/mae": report.mae,
+                "val/rmse": report.rmse,
+                "val/pearson": report.pearson,
+                "val/spearman": report.spearman,
+                "val/rank_acc": report.ranking_accuracy,
+                "epoch": epoch,
+            },
+            step=epoch,
+        )
 
         if report.mae < best_mae:
             best_mae = report.mae
+            best_epoch = epoch
             torch.save(
                 {
                     "model_state": model.state_dict(),
                     "best_mae": best_mae,
+                    "best_epoch": best_epoch,
                     "backbone": config.iqa_backbone,
                 },
                 best_path,
             )
 
-    logger.info(f"Best MAE={best_mae:.4f}")
+    logger.info(f"Best MAE={best_mae:.4f} at epoch {best_epoch}")
     logger.finish()
     return best_path

@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -36,10 +36,10 @@ class Config:
     recog_pretrained: bool = True           # 是否加载 ImageNet 预训练权重
     recog_embedding_dim: int = 256          # Embedding 输出维度
     recog_dropout: float = 0.1              # Dropout 比例
-    recog_margin: float = 0.3               # ArcFace 角度边际 m (Deng et al., CVPR 2019)
+    recog_margin: float = 0.3               # ArcFace 角度边际 m
     recog_scale: float = 30.0               # ArcFace 特征缩放 s
-    recog_epochs: int = 20                  # 识别器训练轮数
-    recog_lr: float = 3e-4                  # 识别器学习率
+    recog_epochs: int = 40                  # 识别器训练轮数
+    recog_lr: float = 1e-4                  # 识别器学习率
     recog_wd: float = 1e-4                  # 识别器权重衰减
     recog_warmup_epochs: int = 1            # 识别器学习率预热轮数
     recog_checkpoint: str = ""              # 复用识别器路径（空=重新训练）
@@ -51,27 +51,23 @@ class Config:
     # -- IQA 回归模型 -------------------------------------------------------------
     iqa_backbone: str = "mobilenetv3_large_100"
     iqa_pretrained: bool = True             # 是否加载 ImageNet 预训练权重
-    iqa_epochs: int = 40                    # IQA 训练轮数
-    iqa_lr: float = 5e-4                    # IQA 学习率
-    iqa_wd: float = 5e-5                    # IQA 权重衰减
+    iqa_epochs: int = 60                    # IQA 训练轮数
+    iqa_lr: float = 1e-4                    # IQA 学习率
+    iqa_wd: float = 1e-5                    # IQA 权重衰减
     iqa_warmup_epochs: int = 2              # IQA 学习率预热轮数
     iqa_grad_clip: float = 1.0              # 梯度裁剪阈值
 
-    iqa_huber_delta: float = 2.0             # Huber Loss 的 delta 参数
-    iqa_rank_weight: float = 0.2             # Label Ranking Loss 权重 (0=关闭)
+    iqa_huber_delta: float = 2.0            # Huber Loss 的 delta 参数
+    iqa_rank_weight: float = 0.2            # Label Ranking Loss 权重 (0=关闭)
     iqa_min_rank_gap: float = 2.0           # 排序对的最小伪标签分数差距
     iqa_degrade_rank_weight: float = 0.5    # Degrade Ranking Loss 权重 (0=消融)
     iqa_degrade_margin: float = 1.0         # 退化排序间隔
+    iqa_moe_gate_weight: float = 0.1        # MoE gate CE loss 权重 (0=关闭)
     iqa_sigmoid_tau: float = 20.0           # 标签排序归一化的 sigmoid 温度系数
 
     # -- 评估 --------------------------------------------------------------------
     eval_split: str = "test"                # 评估所用 split
     eval_batch_size: int = 64               # 评估批次大小
-    eval_reject_steps: list[float] = field(
-        default_factory=lambda: [0.0, 0.05, 0.1, 0.2, 0.3],
-    )
-    eval_far_targets: list[float] = field(default_factory=lambda: [1e-2, 1e-3, 1e-4])
-    eval_max_impostor_pairs: int = 20000
     eval_sample_size: int = 2000            # EER/rank-1 随机抽样数量 (0=全部)
 
     @property
