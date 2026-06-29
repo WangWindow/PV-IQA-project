@@ -14,6 +14,7 @@ from tqdm.auto import tqdm
 
 from pv_iqa.config import Config
 from pv_iqa.models import PalmVeinIQARegressor
+from pv_iqa.models.iqa import StructureAwareMoE
 from pv_iqa.utils.common import autocast, ensure_dir, resolve_device, to_device
 from pv_iqa.utils.datasets import PalmVeinDataset, create_dataloader, load_metadata
 from pv_iqa.utils.degradation import generate_ranking_pair
@@ -189,9 +190,14 @@ def train_iqa(config: Config) -> Path:
                 targets.extend(batch["target"].cpu().tolist())
 
         report = evaluate_regression(targets, preds)
+        alpha_str = ""
+        if isinstance(model.moe, StructureAwareMoE):
+            alpha_mean = torch.sigmoid(model.moe.alpha).mean().item()
+            alpha_str = f" α={alpha_mean:.3f}"
+            logger.log_metrics({"val/alpha_mean": alpha_mean}, step=epoch)
         logger.info(
             f"Epoch {epoch:3d} | MAE={report.mae:.4f} "
-            f"RMSE={report.rmse:.4f} ρ={report.spearman:.3f}"
+            f"RMSE={report.rmse:.4f} ρ={report.spearman:.3f}{alpha_str}"
         )
         logger.log_metrics(
             {

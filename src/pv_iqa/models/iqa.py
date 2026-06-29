@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import timm
 import torch
 import torch.nn.functional as F
@@ -164,18 +162,18 @@ class DegradationMoE(nn.Module):
 # STAR-inspired Structure-Aware Mixture of Experts
 # ---------------------------------------------------------------------------
 class StructureAwareMoE(nn.Module):
-    """STAR 风格的结构感知 MoE 路由。
+    """STAR 风格的结构感知 MoE — MLP gate + GHA 子空间增强。
 
-    路由 logits = σ(α) ⊙ (W_g · x) + (1 − σ(α)) ⊙ ((R · V) · x)
+    路由 logits = σ(α) ⊙ gate_mlp(x) + (1 − σ(α)) ⊙ ((R · V) · x)
 
     其中：
-      W_g  — 可学习 gate 矩阵 (K×d)，任务监督
-      V    — GHA 在线估计的主成分子空间 (K×d)，捕捉输入结构
-      R    — 基础混合矩阵 (K×K)，解耦 expert 与主成分方差层级
-      α    — 插值系数 (K,)，训练中自适应下降
+      gate_mlp — Linear→ReLU→Linear (与 DegradationMoE 相同的 MLP gate)
+      V       — GHA 在线估计的主成分子空间 (K×d)，捕捉输入结构
+      R       — 基础混合矩阵 (K×K)，解耦 expert 与主成分方差层级
+      α       — 插值系数 (K,)，训练中自适应下降
 
     与 DegradationMoE 保持接口兼容：``forward(x, return_gate_logits=True)``
-    返回 ``(output, l_learn)``，其中 l_learn 用于 gate CE 监督。
+    返回 ``(output, gate_mlp_logits)``，CE 监督作用于 MLP gate。
     """
 
     def __init__(
@@ -194,15 +192,17 @@ class StructureAwareMoE(nn.Module):
 
         self.gha = GHAUpdater(d=in_features, K=num_experts, lr=gha_lr)
 
-        self.W_g = nn.Parameter(
-            torch.randn(num_experts, in_features) * (1.0 / math.sqrt(in_features))
-        )
-
         self.R = nn.Parameter(
             torch.eye(num_experts) + torch.randn(num_experts, num_experts) * 0.01
         )
 
-        self.alpha = nn.Parameter(torch.full((num_experts,), 3.0))
+        self.alpha = nn.Parameter(torch.zeros(num_experts))
+
+        self.gate = nn.Sequential(
+            nn.Linear(in_features, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, num_experts),
+        )
 
         self.experts = nn.ModuleList(
             [
@@ -225,12 +225,11 @@ class StructureAwareMoE(nn.Module):
         if update_gha and self.training:
             self.gha.update(x.detach(), m=self.m)
 
-        Z = self.R @ self.gha.V
-        l_learn = F.linear(x, self.W_g)
-        l_struct = F.linear(x, Z)
+        l_mlp = self.gate(x)
+        l_struct = F.linear(x, self.R @ self.gha.V)
 
         alpha_s = torch.sigmoid(self.alpha)
-        l_combined = alpha_s * l_learn + (1.0 - alpha_s) * l_struct
+        l_combined = alpha_s * l_mlp + (1.0 - alpha_s) * l_struct
 
         weights = F.softmax(l_combined, dim=-1)
 
@@ -241,7 +240,7 @@ class StructureAwareMoE(nn.Module):
         output = (weights * expert_outs).sum(dim=-1)
 
         if return_gate_logits:
-            return output, l_learn
+            return output, l_mlp
         return output
 
 
