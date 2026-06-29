@@ -62,7 +62,10 @@ class Config:
     iqa_min_rank_gap: float = 2.0           # 排序对的最小伪标签分数差距
     iqa_degrade_rank_weight: float = 0.5    # Degrade Ranking Loss 权重 (0=消融)
     iqa_degrade_margin: float = 1.0         # 退化排序间隔
+    iqa_moe_structure_aware: bool = True    # 启用 STAR 风格的结构感知 MoE 路由
     iqa_moe_gate_weight: float = 0.1        # MoE gate CE loss 权重 (0=关闭)
+    iqa_gha_iterations: int = 3             # GHA 每 forward 的迭代次数 m
+    iqa_gha_lr: float = 2e-5                # GHA 学习率 η
     iqa_sigmoid_tau: float = 20.0           # 标签排序归一化的 sigmoid 温度系数
 
     # -- 评估 --------------------------------------------------------------------

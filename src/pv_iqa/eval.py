@@ -212,8 +212,11 @@ def _load_checkpoint(
 ) -> tuple[PalmVeinIQARegressor, torch.device]:
     device = resolve_device(config.device)
     ckpt = torch.load(path, map_location=device, weights_only=False)
+    use_sa = ckpt.get("use_structure_aware", False)
     model = PalmVeinIQARegressor(
-        ckpt.get("backbone", config.iqa_backbone), pretrained=False
+        ckpt.get("backbone", config.iqa_backbone),
+        pretrained=False,
+        use_structure_aware=use_sa,
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()

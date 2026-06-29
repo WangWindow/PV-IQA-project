@@ -94,6 +94,11 @@ def apply_degradation(
     raise ValueError(f"Unknown degrade_type: {degrade_type}")
 
 
+def get_degrade_type_idx() -> dict[str, int]:
+    """返回退化类型名称到整数索引的映射。"""
+    return {name: i for i, name in enumerate(DEGRADE_TYPES.keys())}
+
+
 def generate_ranking_pair(
     images: torch.Tensor,
     rng: torch.Generator | None = None,

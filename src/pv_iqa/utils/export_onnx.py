@@ -12,7 +12,11 @@ S = [0.229, 0.224, 0.225]
 
 def export_onnx(config: Config, ckpt: str | Path) -> Path:
     c = torch.load(ckpt, map_location="cpu", weights_only=False)
-    m = PalmVeinIQARegressor(c.get("backbone", config.iqa_backbone), pretrained=False)
+    m = PalmVeinIQARegressor(
+        c.get("backbone", config.iqa_backbone),
+        pretrained=False,
+        use_structure_aware=c.get("use_structure_aware", False),
+    )
     m.load_state_dict(c["model_state"])
     m.eval()
     onnx_p = Path(ckpt).with_suffix(".onnx")

@@ -60,7 +60,11 @@ def train_iqa(config: Config) -> Path:
     )
 
     model = PalmVeinIQARegressor(
-        config.iqa_backbone, pretrained=config.iqa_pretrained
+        config.iqa_backbone,
+        pretrained=config.iqa_pretrained,
+        use_structure_aware=config.iqa_moe_structure_aware,
+        gha_iterations=config.iqa_gha_iterations,
+        gha_lr=config.iqa_gha_lr,
     ).to(device)
 
     opt = AdamW(model.parameters(), lr=config.iqa_lr, weight_decay=config.iqa_wd)
@@ -210,6 +214,7 @@ def train_iqa(config: Config) -> Path:
                     "best_mae": best_mae,
                     "best_epoch": best_epoch,
                     "backbone": config.iqa_backbone,
+                    "use_structure_aware": config.iqa_moe_structure_aware,
                 },
                 best_path,
             )
